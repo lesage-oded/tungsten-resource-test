@@ -1,0 +1,101 @@
+title: AIC Contrail service chain with health check
+
+tags: contrail
+
+description: |
+  This scenario tests the application of Contrail health checks to both
+  service and non-service instances.
+
+  The topology is described in the Heat template.
+
+  iperf3 is used to send TCP traffic, verifying that the service chain
+  is operational with the health check applied.
+
+  flent is used to send ICMP and UDP traffic. The UDP traffic fails,
+  confirming that the health check correctly shut down the port on the
+  UDP service VM because it was not responding to pings. The ICMP test
+  succeeds. The sla ensures that the udp.avg stat is 0 (no data).
+
+  tcpdump is used to verify that the master VM is receiving the ping
+  healthchecks. The sla only validates that pings are received, but
+  manual inspection should be used to ensure that the periodicity is
+  correct, relative to the healthcheck parameters. Note that internally,
+  contrail uses the command "ping -c2", which sends two pings, spaced
+  by one second. The "delay" health check parameter is the interval
+  between sets of pings. For example, with a delay of 5, you might see
+  pings at times t = 0, t = 1, t = 6, t = 7, t = 12, t = 13, etc.
+  The tcpdump looks for only the first ping in each set (with seq = 1),
+  so you would see them spaced by delay + 1 seconds (t = 0, t = 6, t = 12).
+  On the master node, there are overlapping healthchecks, one with delay
+  2, and one with delay 5. Therefore, you should observe two cycles on
+  the tcpdump, one with a 3s period and one with a 6s period. This means
+  that on average, we should see 3 health check probes every 6 seconds, or
+  15 probes in 30 seconds.
+
+deployment:
+
+  template: templates/service_chain_with_healthcheck.yaml
+  env_file: env/service_chain_with_healthcheck.env
+  accommodation: [pair]
+
+execution:
+  tests:
+    -
+      title: TCP
+      class: iperf3
+      sla:
+      - "[type == 'agent'] >> (stats.bandwidth.avg > 1000)"
+    -
+      title: UDP and ICMP
+      class: flent
+      method: ping
+      sla:
+      - "[type == 'agent'] >> (stats.ping_icmp.avg < 2.0)"
+      - "[type == 'agent'] >> (stats.ping_udp.avg == 0)"
+    -
+      title: Healthcheck
+      class: shell
+      script: |
+        #!/bin/bash
+        #set -x
+
+        #setup env
+        mkdir -p /opt/ctd
+        pushd /opt/ctd
+
+        function handleResult {
+          if [ -f ctd-errors ]; then
+             printf "The following tests contained errors:\n" >> ctd-result
+             cat ctd-errors >> ctd-result
+             cat ctd-result >> /dev/stderr
+          fi
+        }
+
+        trap handleResult EXIT
+
+        cat << "EOF" > ctd-exec-test.sh
+            #!/bin/bash
+            function executeTest {
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+               printf "$1\n"
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+
+               sleep 5
+               bash -c "$1"
+
+               if [ "$?" -ne 0 ]; then
+                 echo "$1" >> ctd-errors
+               fi
+               printf "\n"
+            }
+
+            # verify that the correct number of healthchecks are showing up
+            # we expect ~15 probes (between 13 - 17) in 30 seconds
+            executeTest "./verify-healthcheck 30 13 17"
+        EOF
+
+        chmod 755 ctd-exec-test.sh
+        ./ctd-exec-test.sh 2>&1 | tee ctd-exec.log
+
+      sla:
+      - "[type == 'agent'] >> (stderr == '')"

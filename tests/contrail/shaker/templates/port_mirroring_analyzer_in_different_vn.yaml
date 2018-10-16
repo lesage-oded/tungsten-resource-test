@@ -1,0 +1,744 @@
+# Template to create a stack to enable port mirroring on a specific port of left vm,  and where analyzer is also attached to contrail service instance version 2
+
+# left vn = right vn, left vm and right vm both in left vn, analyzer in analyzer vn
+
+ #            Mirrored to-->Analyzer-->analyzer port ( analyzer vn ) -> Attached to port_tuple->SIv2 (left_intf = analyzer_vn)
+ #            |
+ #         left_vm(left_vn) ---- right_vm ( left_vn)
+ #         left_vn -------policy--------analyzer_vn
+
+
+heat_template_version: 2015-04-30
+
+parameters:
+#==shaker-params
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  external_net:
+    type: string
+    description: ID or name of external network
+  server_endpoint:
+    type: string
+    description: Server endpoint address
+  dns_nameservers:
+    type: comma_delimited_list
+    description: DNS nameservers for the subnet
+#==shaker-params
+
+  routing_instance:
+    type: string
+    description: Pass or Deny
+  mirror_direction:
+    type: string
+    description: Protocol
+  udp_port:
+    type: number
+    description: End of the Source Port Range
+  virtual_machine_interface_properties_interface_mirror_mirror_to_nh_mode:
+    type: string
+    description: VIRTUAL_MACHINE_INTERFACE_PROPERTIES_INTERFACE_MIRROR_MIRROR_TO_NH_MODE.
+    constraints:
+      - allowed_values:
+        - dynamic
+        - static
+
+  policy_name:
+    type: string
+    description: Name of the Policy
+    default: {{ unique }}_mirror_policy
+  simple_action:
+    type: string
+    description: Pass or Deny
+  protocol:
+    type: string
+    description: Protocol
+  src_port_end:
+    type: number
+    description: End of the Source Port Range
+  src_port_start:
+    type: number
+    description: Start of the Source Port Range
+  direction:
+    type: string
+    description: Direction of the Policy
+  dst_port_end:
+    type: number
+    description: End of the Destination Port Range
+  dst_port_start:
+    type: number
+    description: Start of the Destination Port Range
+
+
+ # VN Parameters
+  left_vn:
+    type: string
+    description: Name of left network to be created
+    default: {{ unique }}_left_vn
+  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_1:
+    type: string
+    description: subnet prefix for mgmt network
+  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_1:
+    type: string
+    description: subnet prefix len for mgmt network
+
+  analyzer_vn:
+    type: string
+    description: Name of left network to be created
+    default: {{ unique }}_analyzer_vn
+  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_2:
+    type: string
+    description: subnet prefix for mgmt network
+  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_2:
+    type: string
+    description: subnet prefix len for mgmt network
+
+  network_ipam_refs_data_ipam_subnets_addr_from_start_true:
+    type: boolean
+    description: Address allocation from start of the pool
+  domain:
+    type: string
+    description: Name of the Domain
+  project:
+    type: string
+    description: Name of the Project
+
+  # Contrail svc template v2 parameters
+  service_template_name:
+    type: string
+    label: Service template fq name
+    description: Service template for port tuple
+    default: {{ unique }}_contrail_template_version_2
+  service_template_properties_version:
+    type: string
+    description: Indicates service version
+  service_template_properties_service_mode:
+    type: string
+    description: service mode
+  service_template_properties_service_type:
+    type: string
+    description: service type
+  service_template_properties_image_name:
+    type: string
+    description: Name of the image
+  service_template_properties_flavor:
+    type: string
+    description: Flavor
+  service_template_properties_interface_type_service_interface_type_1:
+    type: string
+    description: service_interface_type for the ServiceTemplate
+  service_template_properties_service_scaling:
+    type: string
+    description: Indicates whether service scaling is enabled
+  service_template_properties_availability_zone_enable:
+    type: string
+    description: Indicates availability zone is enabled
+  service_template_properties_ordered_interfaces:
+    type: string
+    description: Indicates service interfaces are ordered
+  service_template_properties_service_virtualization_type:
+    type: string
+    description: Indicates virtualization type
+
+  # Contrail service instance version 2 parameters
+  service_instance_name:
+    type: string
+    label: Service instance name
+    description: Service instance for port tuple
+    default: {{ unique }}_serviceinstancev2
+
+  # Analyzer name
+  svm_name:
+    type: string
+    description: Name of the SVM
+    default: {{ unique }}_contrail_svm
+
+  # Nova image parameters
+  left_vm_name:
+    type: string
+    description: Name of the left VM
+    default: {{ unique }}_left_vm
+  right_vm_name:
+    type: string
+    description: Name of the right VM
+    default: {{ unique }}_right_vm
+  image:
+    type: string
+    description: Name of the image
+  flavor:
+    type: string
+    description: Flavor
+
+  # Verification Message String
+  verification_message_string:
+    type: string
+    description: Message string which shall be searched in port-mirrored data for verification
+
+  # Woof port
+  woof_port:
+    type: string
+    description: Port, which shall be used by woof
+
+  # tcpdump trigger port
+  tcpdump_trigger_port:
+    type: string
+    description: When SVM receives TCP traffic on this port it will stop tcpdump
+
+  svm_availability_zone:
+    type: string
+    description: SVM availability zone
+
+resources:
+#==shaker resources
+  shaker_private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: {{ unique }}_net
+
+  shaker_private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      cidr: 10.0.0.0/16
+      enable_dhcp: true
+      gateway_ip: 10.0.0.1
+
+  shaker_router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external_net }
+
+  shaker_router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: shaker_router }
+      subnet_id: { get_resource: shaker_private_subnet }
+
+  shaker_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules: [
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: udp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: icmp},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: 132,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 22,
+        port_range_max: 22}]
+#==shaker resources
+
+  template_NetworkIpam_1:
+    type: OS::ContrailV2::NetworkIpam
+    properties:
+      name: { get_param: left_vn }
+
+  template_NetworkIpam_2:
+    type: OS::ContrailV2::NetworkIpam
+    properties:
+      name: { get_param: analyzer_vn }
+
+  template_VirtualNetwork_1:
+    type: OS::ContrailV2::VirtualNetwork
+    depends_on: [ template_NetworkIpam_1, template_NetworkPolicy ]
+    properties:
+      name: { get_param: left_vn }
+      network_ipam_refs: [{ get_resource: template_NetworkIpam_1 }]
+      network_ipam_refs_data:
+        [{
+          network_ipam_refs_data_ipam_subnets:
+            [{
+              network_ipam_refs_data_ipam_subnets_subnet:
+                {
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix: { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_1 },
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len: { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_1 },
+                },
+            }]
+         }]
+      network_policy_refs: [{ list_join: [':', [ {get_param: domain}, {get_param: project}, {get_param: policy_name} ]]}]
+      network_policy_refs_data:
+        [{
+          network_policy_refs_data_sequence:
+            {
+              network_policy_refs_data_sequence_major: 0,
+              network_policy_refs_data_sequence_minor: 0,
+            },
+        }]
+
+  template_VirtualNetwork_2:
+    type: OS::ContrailV2::VirtualNetwork
+    depends_on: [ template_NetworkIpam_1, template_NetworkPolicy ]
+    properties:
+      name: { get_param: analyzer_vn }
+      network_ipam_refs: [{ get_resource: template_NetworkIpam_2 }]
+      network_ipam_refs_data:
+        [{
+          network_ipam_refs_data_ipam_subnets:
+            [{
+              network_ipam_refs_data_ipam_subnets_subnet:
+                {
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix: { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_2 },
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len: { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_2 },
+                },
+            }]
+         }]
+      network_policy_refs: [{ list_join: [':', [ {get_param: domain}, {get_param: project}, {get_param: policy_name} ]]}]
+      network_policy_refs_data:
+        [{
+          network_policy_refs_data_sequence:
+            {
+              network_policy_refs_data_sequence_major: 0,
+              network_policy_refs_data_sequence_minor: 0,
+            },
+        }]
+
+  # Contrail svc template v2
+  template_ServiceTemplate:
+    type: OS::ContrailV2::ServiceTemplate
+    properties:
+      name: { get_param: service_template_name }
+      service_template_properties:
+        {
+          service_template_properties_version: { get_param: service_template_properties_version },
+          service_template_properties_service_mode: { get_param: service_template_properties_service_mode },
+          service_template_properties_service_type: { get_param: service_template_properties_service_type },
+          service_template_properties_image_name: { get_param: service_template_properties_image_name },
+          service_template_properties_service_scaling: { get_param: service_template_properties_service_scaling },
+          service_template_properties_interface_type:
+            [
+              {
+              service_template_properties_interface_type_service_interface_type: { get_param: service_template_properties_interface_type_service_interface_type_1 },
+              },
+            ],
+          service_template_properties_flavor: { get_param: service_template_properties_flavor },
+          service_template_properties_ordered_interfaces: { get_param: service_template_properties_ordered_interfaces },
+          service_template_properties_service_virtualization_type: { get_param: service_template_properties_service_virtualization_type },
+          service_template_properties_availability_zone_enable: { get_param: service_template_properties_availability_zone_enable },
+        }
+      domain: { get_param: domain }
+
+  # Contrail service instance version 2
+  template_ServiceInstance:
+    type: OS::ContrailV2::ServiceInstance
+    depends_on: [ template_ServiceTemplate ]
+    properties:
+      name: { get_param: service_instance_name }
+      service_instance_properties:
+        {
+          service_instance_properties_interface_list:
+            [
+              {
+                service_instance_properties_interface_list_virtual_network:
+                  {
+                    list_join: [':', { get_attr: [ template_VirtualNetwork_2, fq_name ] } ]
+                  },
+              },
+            ],
+        }
+      service_template_refs: [{ get_resource: template_ServiceTemplate }]
+
+  template_PortTuple:
+    type: OS::ContrailV2::PortTuple
+    depends_on: [ template_ServiceInstance ]
+    properties:
+      service_instance: { list_join: [':', { get_attr: [ template_ServiceInstance, fq_name ] } ] }
+
+  template_VirtualMachineInterface_1:
+    type: OS::ContrailV2::VirtualMachineInterface
+    depends_on: [ template_PortTuple, template_InstanceIp_2 ]
+    properties:
+      name: { get_param: left_vm_name}
+      virtual_network_refs: [{ list_join: [':', { get_attr: [ template_VirtualNetwork_1, fq_name ] } ] }]
+      virtual_machine_interface_properties:
+        {
+          virtual_machine_interface_properties_interface_mirror:
+            {
+              virtual_machine_interface_properties_interface_mirror_traffic_direction: {get_param: mirror_direction},
+              virtual_machine_interface_properties_interface_mirror_mirror_to:
+                {
+                  virtual_machine_interface_properties_interface_mirror_mirror_to_analyzer_name: {get_param: svm_name},
+                  virtual_machine_interface_properties_interface_mirror_mirror_to_analyzer_ip_address: { get_attr: [template_InstanceIp_2, instance_ip_address] },
+                  virtual_machine_interface_properties_interface_mirror_mirror_to_routing_instance: {get_param : routing_instance},
+                  virtual_machine_interface_properties_interface_mirror_mirror_to_udp_port: { get_param: udp_port},
+                  virtual_machine_interface_properties_interface_mirror_mirror_to_nh_mode: { get_param: virtual_machine_interface_properties_interface_mirror_mirror_to_nh_mode },
+                }
+            }
+        }
+
+  # Analyzer VMI
+  template_VirtualMachineInterface_2:
+    type: OS::ContrailV2::VirtualMachineInterface
+    depends_on: [ template_PortTuple,  ]
+    properties:
+      virtual_machine_interface_properties:
+        {
+          virtual_machine_interface_properties_service_interface_type: { get_param: service_template_properties_interface_type_service_interface_type_1 },
+        }
+      port_tuple_refs: [{ get_resource: template_PortTuple }]
+      virtual_network_refs: [{ list_join: [':', { get_attr: [ template_VirtualNetwork_2, fq_name ] } ] }]
+
+  template_VirtualMachineInterface_3:
+    type: OS::ContrailV2::VirtualMachineInterface
+    depends_on: [ template_PortTuple ]
+    properties:
+      name: { get_param: right_vm_name}
+      virtual_network_refs: [{ list_join: [':', { get_attr: [ template_VirtualNetwork_1, fq_name ] } ] }]
+
+
+  template_InstanceIp_1:
+    type: OS::ContrailV2::InstanceIp
+    depends_on: [ template_InstanceIp_2, template_VirtualMachineInterface_1, template_VirtualNetwork_1 ]
+    properties:
+      virtual_machine_interface_refs: [{ get_resource: template_VirtualMachineInterface_1 }]
+      virtual_network_refs: [{ list_join: [':', { get_attr: [ template_VirtualNetwork_1, fq_name ] } ] }]
+
+  # Analyzer ip
+  template_InstanceIp_2:
+    type: OS::ContrailV2::InstanceIp
+    depends_on: [ template_VirtualMachineInterface_2, template_VirtualNetwork_1 ]
+    properties:
+      virtual_machine_interface_refs: [{ get_resource: template_VirtualMachineInterface_2 }]
+      virtual_network_refs: [{ list_join: [':', { get_attr: [ template_VirtualNetwork_2, fq_name ] } ] }]
+
+  template_InstanceIp_3:
+    type: OS::ContrailV2::InstanceIp
+    depends_on: [ template_VirtualMachineInterface_3, template_VirtualNetwork_1 ]
+    properties:
+      virtual_machine_interface_refs: [{ get_resource: template_VirtualMachineInterface_3 }]
+      virtual_network_refs: [{ list_join: [':', { get_attr: [ template_VirtualNetwork_1, fq_name ] } ] }]
+
+  # Analyzer instance
+  instance:
+    type: OS::Nova::Server
+    depends_on: [ template_InstanceIp_1, template_InstanceIp_2, template_InstanceIp_3 ]
+    properties:
+      name: {get_param: svm_name }
+      image: { get_param:  service_template_properties_image_name }
+      flavor: { get_param: service_template_properties_flavor }
+      availability_zone: {get_param: svm_availability_zone }
+      networks:
+        - port: { get_resource: template_VirtualMachineInterface_2 }
+        #==external port
+        #- network: { get_param: external_net }
+        #==external port
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash
+
+            echo `date` > ~/start-up-ts.txt
+
+            #==external port
+            dhclient ens4
+            #==external port
+
+            # don't send icmp port unreachables (type=3 code=3) !!!
+            # since there is no socket actually listening on the UDP
+            # port to which traffic is being mirrored (udp/8099), the
+            # operating system will respond to the mirrored traffic
+            # with port unreachable messages, which will then be re-
+            # mirrored, causing an ugly loop. let's avoid that.
+            sysctl -w net.ipv4.icmp_msgs_per_sec=0
+
+            # fire up tcpdump
+            tcpdump -l -U -i ens3 -s 65535 -w ~/capture_packets.pcap udp port $mirror_udp_port &
+
+            # wait for the stop signal
+            nc -l $tcpdump_trigger_port && pkill tcpdump
+
+            # serve up the captured file
+            woof -p $woof_port ~/capture_packets.pcap &
+
+          params:
+            "$ANALYZER_VN": { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_2 }
+            "$left_vm_ip": { get_attr: [template_InstanceIp_1, instance_ip_address] }
+            "$right_vm_ip": { get_attr: [template_InstanceIp_3, instance_ip_address] }
+            "$analyzer_vm_ip": { get_attr: [template_InstanceIp_2, instance_ip_address] }
+            "$woof_port": { get_param: woof_port }
+            "$mirror_udp_port": { get_param: udp_port }
+            "$tcpdump_trigger_port": { get_param: tcpdump_trigger_port }
+
+
+  template_NetworkPolicy:
+    type: OS::ContrailV2::NetworkPolicy
+    properties:
+      name: { get_param: policy_name }
+      network_policy_entries:  {
+        network_policy_entries_policy_rule: [{
+          network_policy_entries_policy_rule_direction: { get_param: direction },
+          network_policy_entries_policy_rule_protocol: { get_param: protocol },
+          network_policy_entries_policy_rule_src_ports: [{
+            network_policy_entries_policy_rule_src_ports_start_port: { get_param: src_port_start },
+            network_policy_entries_policy_rule_src_ports_end_port: { get_param: src_port_end }
+          }],
+          network_policy_entries_policy_rule_dst_ports: [{
+            network_policy_entries_policy_rule_dst_ports_start_port: { get_param: dst_port_start },
+            network_policy_entries_policy_rule_dst_ports_end_port: { get_param: dst_port_end }
+          }],
+          network_policy_entries_policy_rule_dst_addresses: [{
+            network_policy_entries_policy_rule_dst_addresses_virtual_network: {
+              list_join: [':', [ {get_param: domain}, {get_param: project}, {get_param: analyzer_vn} ]]
+            }
+          }],
+          network_policy_entries_policy_rule_src_addresses: [{
+            network_policy_entries_policy_rule_src_addresses_virtual_network: {
+              list_join: [':', [ {get_param: domain}, {get_param: project}, {get_param: left_vn} ]]
+            }
+          }],
+          network_policy_entries_policy_rule_action_list: {
+            network_policy_entries_policy_rule_action_list_simple_action: { get_param: simple_action },
+          }
+        }]
+      }
+
+{% for agent in agents.values() %}
+  {% set agent_index = agent.id.split('_')[3] %}
+  {% if 'master' in agent.id %}
+
+  #{{ agent.id }}:
+  master_vm_{{ agent_index }}:
+    type: OS::Nova::Server
+    depends_on: [ template_InstanceIp_1, instance, slave_vm_{{ agent_index }} ]
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: "{{ agent.availability_zone }}"
+      networks:
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_shaker_port }
+        #==shaker port
+        - port: { get_resource: template_VirtualMachineInterface_1 }
+        #==external port
+        #- network: { get_param: external_net }
+        #==external port
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash
+
+            echo `date` > ~/start-up-ts.txt
+
+            dhclient ens4
+            sudo ip r add $ANALYZER_VN/$VN_LEN dev ens4
+
+            #==external port
+            #dhclient ens5
+            #==external port
+
+            echo $left_vm_ip >> ~/left_vm_ip.txt
+            echo $right_vm_ip >> ~/right_vm_ip.txt
+            echo $analyzer_vm_ip >> ~/analyzer_vm_ip.txt
+            echo $verification_msg >> ~/verification_msg.txt
+            echo $woof_port >> ~/woof_port.txt
+
+            ###########################################################
+            # Create a small tcp_client.py file and run it
+            ###########################################################
+            cat << EOF | tee -a ~/tcp_client.py
+            import socket
+            import sys
+
+            # Create a TCP/IP socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+            # Connect the socket to the port where the server is listening
+            server_address = ('$right_vm_ip', 10000)
+            print >>sys.stdout, 'connecting to %s port %s' % server_address
+            sock.connect(server_address)
+
+            try:
+                message = '$verification_msg'
+
+                print >>sys.stdout, 'sending data to the client'
+                sock.sendall(message)
+
+            finally:
+                print >>sys.stdout, 'closing socket'
+                sock.close()
+            EOF
+            ###########################################################
+            python ~/tcp_client.py > ~/client_output
+
+            sleep 5
+
+            # trigger the svm to stop the tcpdump
+            echo stop | nc $analyzer_vm_ip $tcpdump_trigger_port
+
+            #==shaker cmd
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID --debug --log-file /var/log/shaker-agent.log
+            #==shaker cmd
+
+
+          params:
+            #==shaker params
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+            #==shaker params
+            "$ANALYZER_VN": { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_2 }
+            "$VN_LEN": { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_2 }
+            "$left_vm_ip": { get_attr: [template_InstanceIp_1, instance_ip_address] }
+            "$right_vm_ip": { get_attr: [template_InstanceIp_3, instance_ip_address] }
+            "$analyzer_vm_ip": { get_attr: [template_InstanceIp_2, instance_ip_address] }
+            "$verification_msg": { get_param: verification_message_string }
+            "$woof_port": { get_param: woof_port }
+            "$tcpdump_trigger_port": { get_param: tcpdump_trigger_port }
+
+  #==shaker port
+  {{ agent.id }}_shaker_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: shaker_private_subnet }
+      security_groups:
+        - { get_resource: shaker_security_group }
+        - default
+  #==shaker port
+
+  {% else %}
+
+  #{{ agent.id }}:
+  slave_vm_{{ agent_index }}:
+    type: OS::Nova::Server
+    depends_on: [ template_InstanceIp_3, instance  ]
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: "{{ agent.availability_zone }}"
+      networks:
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_shaker_port }
+        #==shaker port
+        - port: { get_resource: template_VirtualMachineInterface_3 }
+        #==external port
+        #- network: { get_param: external_net }
+        #==external port
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash
+
+            echo `date` > ~/start-up-ts.txt
+
+            dhclient ens4
+            sudo ip r add $LEFT_VN/$VN_LEN dev ens4
+
+            #==external port
+            #dhclient ens5
+            #==external port
+
+            #####################################################
+            # Create a small tcp_server.py file and run it
+            #####################################################
+            cat << EOF | tee -a ~/tcp_server.py
+            import socket
+            import sys
+
+            # Create a TCP/IP socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+            # Bind the socket to the port
+            server_address = ('$right_vm_ip', 10000)
+            print >>sys.stdout, 'starting up on %s port %s' % server_address
+            sock.bind(server_address)
+
+            # Listen for incoming connections
+            sock.listen(1)
+
+            while True:
+                # Wait for a connection
+                print >>sys.stdout, 'waiting for a connection'
+                connection, client_address = sock.accept()
+
+                # Send data
+                message = '$verification_msg'
+
+                try:
+                    print >>sys.stdout, 'connection from', client_address
+
+                    # Look for the response
+                    amount_received = 0
+                    amount_expected = len(message)
+
+                    while amount_received < amount_expected:
+                        data = connection.recv(amount_expected)
+                        amount_received += len(data)
+                        print >>sys.stdout, 'received "%s"' % data
+
+                finally:
+                    # Clean up the connection
+                    connection.close()
+            EOF
+            #####################################################
+            python ~/tcp_server.py > ~/server_output &
+
+            #==shaker cmd
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID --debug --log-file /var/log/shaker-agent.log
+            #==shaker cmd
+
+          params:
+            #==shaker params
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+            #==shaker params
+            "$LEFT_VN": { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_1 }
+            "$VN_LEN": { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_1 }
+            "$left_vm_ip": { get_attr: [template_InstanceIp_1, instance_ip_address] }
+            "$right_vm_ip": { get_attr: [template_InstanceIp_3, instance_ip_address] }
+            "$analyzer_vm_ip": { get_attr: [template_InstanceIp_2, instance_ip_address] }
+            "$verification_msg": { get_param: verification_message_string }
+
+  #==shaker port
+  {{ agent.id }}_shaker_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: shaker_private_subnet }
+      security_groups:
+        - { get_resource: shaker_security_group }
+        - default
+  #==shaker port
+
+  {% endif %}
+{% endfor %}
+
+outputs:
+#==shaker output
+{% for agent in agents.values() %}
+  {% set agent_index = agent.id.split('_')[3] %}
+  {% if 'master' in agent.id %}
+
+  {{ agent.id }}_instance_name:
+    value: { get_attr: [ master_vm_{{ agent_index }}, instance_name ] }
+  {{ agent.id }}_ip:
+    value: { get_attr: [ master_vm_{{ agent_index }}, networks, { get_attr: [shaker_private_net, name] }, 0 ] }
+
+  {% else %}
+
+  {{ agent.id }}_instance_name:
+    value: { get_attr: [ slave_vm_{{ agent_index }}, instance_name ] }
+  {{ agent.id }}_ip:
+    value: { get_attr: [ slave_vm_{{ agent_index }}, networks, { get_attr: [shaker_private_net, name] }, 0 ] }
+  {% endif %}
+{% endfor %}
+#==shaker output

@@ -1,0 +1,65 @@
+title: AIC Contrail Jumbo frames within same virtual network as well as across different virtual networks
+
+tags: contrail
+
+description:
+  Jumbo frames within same virtual network as well as across different virtual networks scenarios
+
+deployment:
+  template: templates/jumbo_frames_flat_and_router.yaml
+  env_file: env/jumbo_frames_flat_and_router.env
+  accommodation: [pair]
+
+execution:
+  tests:
+    -
+      title: test transmission of jumbo frames within same VN as well as across different VNs
+      class: shell
+      script: |
+        #!/bin/bash
+        #set -x
+
+        #setup env
+        mkdir -p /opt/ctd
+        pushd /opt/ctd
+
+        function handleResult {
+          if [ -f ctd-errors ]; then
+             printf "The following tests contained errors:\n" >> ctd-result
+             cat ctd-errors >> ctd-result
+             cat ctd-result >>/dev/stderr
+          fi
+        }
+
+        trap handleResult EXIT
+
+        cat << "EOF" > ctd-exec-test.sh
+            #!/bin/bash
+
+            right_vm_1_ip=`cat ~/right_vm_1_ip.txt`
+            right_vm_2_ip=`cat ~/right_vm_2_ip.txt`
+
+            function executeTest {
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+               printf "$1\n"
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+
+               sleep 5
+               bash -c "$1"
+
+               if [ "$?" -ne 0 ]; then
+                 echo "$1" >> ctd-errors
+               fi
+               printf "\n"
+            }
+
+            #jumbo tests
+            executeTest "echo $right_vm_1_ip | xargs ping -s 8800 -M do -c 5"
+            executeTest "echo $right_vm_2_ip | xargs ping -s 8800 -M do -c 5"
+        EOF
+
+        chmod 755 ctd-exec-test.sh
+        ./ctd-exec-test.sh 2>&1 | tee ctd-exec.log
+
+      sla:
+      - "[type == 'agent'] >> (stderr == '')"

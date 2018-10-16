@@ -1,0 +1,72 @@
+title: AIC Contrail Load Balancer Pool Test
+
+tags: contrail
+
+description:
+  A client sends requests to load balancer which should distribute the traffic its two pool members
+
+deployment:
+  template: templates/load_balancer.yaml
+  env_file: env/load_balancer.env
+  accommodation: [ single_room ]
+
+execution:
+  tests:
+    -
+      title: Test to ensure that load balancer distributes traffic to its two pool member servers
+      class: shell
+      script: |
+        #!/bin/bash
+        #set -x
+
+        #setup env
+        mkdir -p /opt/ctd
+        pushd /opt/ctd
+
+        function handleResult {
+          if [ -f ctd-errors ]; then
+             printf "The following tests contained errors:\n" >> ctd-result
+             cat ctd-errors >> ctd-result
+             cat ctd-result >>/dev/stderr
+          fi
+        }
+
+        cat << "EOF" > ctd-exec-test.sh
+           #!/bin/bash
+
+            vip=`cat /tmp/virtual_ip.txt`
+            port=`cat /tmp/port.txt`
+
+            function executeTest {
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+               printf "$1\n"
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+
+               sleep 5
+               bash -c "$1"
+
+               if [ "$?" -ne 0 ]; then
+                 echo "$1" >> ctd-errors
+               fi
+               printf "\n"
+            }
+
+            # Check wget with service VIP
+            for i in {1..10}
+              do
+               wget -o wget-log http://${vip}:${port}/ -O - | tee -a result.txt
+               sleep 1.$[RANDOM]s
+              done
+            count=$(sort -u result.txt | wc -l)
+
+            executeTest '[[ $(sort -u result.txt | wc -l) == 2 ]]'
+
+        EOF
+
+        chmod 755 ctd-exec-test.sh
+        ./ctd-exec-test.sh 2>&1 | tee ctd-exec.log
+
+        handleResult
+      sla:
+      - "[type == 'agent'] >> (stderr == '')"
+

@@ -1,0 +1,79 @@
+title: AIC Contrail vDNS testcase with various vRecord types (A, AAAA, CNAME, MX, PTR, NS)
+
+tags: contrail
+
+description:
+  AIC Contrail vDNS testcase with various vRecord types (A, AAAA, CNAME, MX, PTR, NS)
+
+deployment:
+  template: templates/vdns_a_aaaa_cname_mx_ptr_ns.yaml
+  env_file: env/vdns_a_aaaa_cname_mx_ptr_ns.env
+  accommodation: [pair, compute_nodes: 1]
+
+execution:
+  tests:
+    -
+      title: vDNS with diff vRecord types (A, AAAA, CNAME, MX, NS)
+      class: shell
+      script: |
+        #!/bin/bash
+        #set -x
+
+        #setup env
+        mkdir -p /opt/ctd
+        pushd /opt/ctd
+
+        function handleResult {
+          if [ -f ctd-errors ]; then
+             printf "The following tests contained errors:\n" >> ctd-result
+             cat ctd-errors >> ctd-result
+             cat ctd-result >>/dev/stderr
+          fi
+        }
+
+        trap handleResult EXIT
+
+        cat << "EOF" > ctd-exec-test.sh
+            #!/bin/bash
+
+            parent_ipam_1_vn_1_gw=`cat ~/parent_ipam_1_vn_1_gw.txt`
+            parent_vn_1_vm_1_ip=`cat ~/parent_vn_1_vm_1_ip.txt`
+            parent_domain_name=`cat ~/parent_domain_name.txt`
+            parent_cname=`cat ~/parent_cname.txt`
+            child_sub_domain_name=`cat ~/child_sub_domain_name.txt`
+
+            function executeTest {
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+               printf "$1\n"
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+
+               sleep 5
+               bash -c "$1"
+
+               if [ "$?" -ne 0 ]; then
+                 echo "$1" >> ctd-errors
+               fi
+               printf "\n"
+            }
+
+            sleep 27
+
+            # vdns tests - parent vdns
+            executeTest "nslookup -query=a $parent_domain_name $parent_ipam_1_vn_1_gw"
+            executeTest "nslookup -query=aaaa $parent_domain_name $parent_ipam_1_vn_1_gw"
+            executeTest "nslookup -query=cname $parent_cname.$parent_domain_name $parent_ipam_1_vn_1_gw"
+            executeTest "nslookup -query=mx $parent_domain_name $parent_ipam_1_vn_1_gw"
+            executeTest "nslookup -query=ptr $parent_vn_1_vm_1_ip $parent_ipam_1_vn_1_gw"
+
+            # vdns tests - child vdns through delegation NS record
+            executeTest "nslookup $child_sub_domain_name.$parent_domain_name $parent_ipam_1_vn_1_gw"
+            executeTest "nslookup -query=aaaa $child_sub_domain_name.$parent_domain_name $parent_ipam_1_vn_1_gw"
+            executeTest "nslookup -query=cname $parent_cname.$child_sub_domain_name.$parent_domain_name $parent_ipam_1_vn_1_gw"
+            executeTest "nslookup -query=mx $child_sub_domain_name.$parent_domain_name $parent_ipam_1_vn_1_gw"
+        EOF
+
+        chmod 755 ctd-exec-test.sh
+        ./ctd-exec-test.sh 2>&1 | tee ctd-exec.log
+
+      sla:
+      - "[type == 'agent'] >> (stderr == '')"

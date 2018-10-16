@@ -1,0 +1,313 @@
+heat_template_version: 2015-04-30
+
+description: >
+  HOT template to create a LoadbalancerPool.
+  Two Nova instances are created as load balancer members.
+  The Shaker agent VMs are load balancer clients.
+
+parameters:
+#==shaker-params
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  external_net:
+    type: string
+    description: ID or name of external network
+  server_endpoint:
+    type: string
+    description: Server endpoint address
+  dns_nameservers:
+    type: comma_delimited_list
+    description: DNS nameservers for the subnet
+#==shaker-params
+
+  #loadbalancer_pool_properties
+  loadbalancer_pool_name:
+    type: string
+    description: name for the LoadbalancerPool
+    # required: optional
+    default: {{ unique }}_lb_pool
+  loadbalancer_pool_properties_status:
+    type: string
+    description: status for the LoadbalancerPool
+    # operations: CRUD
+    # required: optional
+  loadbalancer_pool_properties_admin_state:
+    type: boolean
+    description: admin_state for the LoadbalancerPool
+    # operations: CRUD
+    # required: optional
+  loadbalancer_pool_properties_protocol:
+    type: string
+    description: protocol for the LoadbalancerPool
+    # operations: CRUD
+    # required: optional
+  loadbalancer_pool_properties_loadbalancer_method:
+    type: string
+    description: loadbalancer_method for the LoadbalancerPool
+    # operations: CRUD
+    # required: optional
+  loadbalancer_pool_properties_subnet_id:
+    type: string
+    description: subnet_id for the LoadbalancerPool
+    default: 'None'
+    # operations: CRUD
+    # required: optional
+
+
+  # VN Parameters
+
+  az_1:
+    type: string
+    description: Availability Zone for agent
+
+  app_port:
+    type: string
+    description: port number user by app
+    default: "8086"
+
+  #loadbalancer_member
+  lbm_state:
+    type: boolean
+    description: loadbalancer_member state
+    default: True
+
+  #vip parameters
+  vip_name:
+    type: string
+    description: virtual ip name
+    default: "{{ unique }}_vip"
+  vip_admin_state:
+    type: boolean
+    description: vip admin state
+    default: True
+  vip_protocol:
+    type: string
+    description: protocol used for virtual ip
+    default: "HTTP"
+  vip_port:
+    type: string
+    description: port used by virtual ip
+    default: "8086"
+  vip_address:
+    type: string
+    description: virtual ip address for load balancer proxy
+    default: '18.0.0.100'
+
+
+resources:
+  pool_net:
+    type: OS::Neutron::Net
+    properties:
+      name: '{{ unique }}_pool_net'
+
+  pool_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: pool_net }
+      cidr: 18.0.0.0/24
+      enable_dhcp: true
+      gateway_ip: 18.0.0.1
+
+  shaker_private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: {{ unique }}_net
+
+  shaker_private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      cidr: 10.0.0.0/24
+      enable_dhcp: true
+      gateway_ip: 10.0.0.1
+
+  shaker_router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external_net }
+
+  shaker_router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: shaker_router }
+      subnet_id: { get_resource: shaker_private_subnet }
+
+  shaker_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules: [
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: udp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: icmp},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: 132,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 22,
+        port_range_max: 22}]
+#==shaker resources
+
+{% for agent in agents.values() %}
+
+  {{ agent.id }}:
+    type: OS::Nova::Server
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: {{ agent.availability_zone }}
+      networks:
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_shaker_port }
+        #==shaker port
+        - network: { get_resource: pool_net }
+
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #! /bin/sh -v
+
+            dhclient ens4
+
+            echo $virtual_ip > /tmp/virtual_ip.txt
+            echo $PORT > /tmp/port.txt
+
+            #==shaker cmd
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID --debug --log-file /var/log/shaker-agent.log
+            #==shaker cmd
+          params:
+            #==shaker params
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+            #==shaker params
+            "$PORT": { get_param: app_port }
+            "$virtual_ip": { get_param: vip_address }
+
+  #==shaker port
+
+  {{ agent.id }}_shaker_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: shaker_private_subnet }
+      security_groups:
+        - { get_resource: shaker_security_group }
+        - default
+  #==shaker port
+
+{% endfor %}
+
+{% for i in ['member1','member2'] %}
+
+  {{ unique }}_{{ i }}_pool_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: pool_net }
+      fixed_ips:
+        - subnet_id: { get_resource: pool_subnet }
+
+  {{ unique }}_{{ i }}_pool_member:
+    type: OS::ContrailV2::LoadbalancerMember
+    properties:
+      name: {{ unique }}_{{ i }}_pool_member
+      loadbalancer_member_properties:
+        {
+          loadbalancer_member_properties_admin_state: { get_param: lbm_state},
+          loadbalancer_member_properties_address: { get_attr: [ {{ unique }}_{{ i }}_pool_port, fixed_ips, 0, ip_address ]},
+          loadbalancer_member_properties_protocol_port:  { get_param: app_port },
+        }
+      loadbalancer_pool: { get_resource: template_LoadbalancerPool }
+
+
+  {{ unique }}_{{ i }}:
+    type: OS::Nova::Server
+    properties:
+      name: {{ unique }}_{{ i }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: { get_param: az_1 }
+      networks:
+        - port: { get_resource: {{ unique }}_{{ i }}_pool_port }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #! /bin/sh -v
+
+            dhclient ens4
+
+            touch index.html
+            content=$(hostname)
+            echo $content > index.html
+            python -m SimpleHTTPServer $PORT
+
+          params:
+            "$PORT": { get_param: app_port }
+
+{% endfor %}
+
+  template_LoadbalancerPool:
+    type: OS::ContrailV2::LoadbalancerPool
+    properties:
+      name: { get_param: loadbalancer_pool_name }
+      loadbalancer_pool_properties:
+        {
+          loadbalancer_pool_properties_status: { get_param: loadbalancer_pool_properties_status },
+          loadbalancer_pool_properties_admin_state: { get_param: loadbalancer_pool_properties_admin_state },
+          loadbalancer_pool_properties_protocol: { get_param: loadbalancer_pool_properties_protocol },
+          loadbalancer_pool_properties_loadbalancer_method: { get_param: loadbalancer_pool_properties_loadbalancer_method },
+          loadbalancer_pool_properties_subnet_id: { get_resource: pool_subnet },
+        }
+
+  virtualIP_port:
+    type: OS::Neutron::Port
+    properties:
+      admin_state_up: true
+      network_id: { get_resource: pool_net }
+      fixed_ips:
+        - subnet_id: { get_resource: pool_subnet }
+          ip_address: { get_param: vip_address }
+
+  template_VirtualIP:
+    type: OS::ContrailV2::VirtualIp
+    properties:
+      name: {get_param: vip_name}
+      loadbalancer_pool_refs: [{get_resource: template_LoadbalancerPool}]
+      virtual_machine_interface_refs: [{ get_resource: virtualIP_port }]
+      virtual_ip_properties:
+        {
+          virtual_ip_properties_address: { get_param: vip_address },
+          virtual_ip_properties_admin_state: {get_param: vip_admin_state},
+          virtual_ip_properties_protocol: {get_param: vip_protocol},
+          virtual_ip_properties_protocol_port: {get_param: app_port},
+          virtual_ip_properties_subnet_id: { get_resource: pool_subnet},
+        }
+
+outputs:
+#==shaker output
+{% for agent in agents.values() %}
+  {{ agent.id }}_instance_name:
+    value: { get_attr: [ {{ agent.id }}, instance_name ] }
+  {{ agent.id }}_ip:
+    value: { get_attr: [ {{ agent.id }}, networks, { get_attr: [shaker_private_net, name] }, 0 ] }
+{% endfor %}
+#==shaker output
+  virtual_ip:
+    value: { get_param: vip_address}
+

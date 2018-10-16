@@ -1,0 +1,303 @@
+# Template to create a stack to test jumbo frames within same VN as well as different VNs through router
+
+
+heat_template_version: 2015-04-30
+
+parameters:
+#==shaker-params
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  external_net:
+    type: string
+    description: ID or name of external network
+  server_endpoint:
+    type: string
+    description: Server endpoint address
+  dns_nameservers:
+    type: comma_delimited_list
+    description: DNS nameservers for the subnet
+#==shaker-params
+
+ # VN Parameters
+  private_net_name_1:
+    type: string
+    description: Name of left network to be created
+  private_net_cidr_1:
+    type: string
+    description: subnet prefix for network-1
+  private_net_gateway_1:
+    type: string
+    description: gateway for network-1
+
+  private_net_name_2:
+    type: string
+    description: Name of right network to be created
+  private_net_cidr_2:
+    type: string
+    description: subnet prefix for network-2
+  private_net_gateway_2:
+    type: string
+    description: gateway for network-2
+
+  private_net_name_3:
+    type: string
+    description: Name of shared network to be created
+  private_net_cidr_3:
+    type: string
+    description: subnet prefix for network-3
+
+  # Nova image parameters
+  image:
+    type: string
+    description: Name of the image
+  flavor:
+    type: string
+    description: Flavor
+
+resources:
+#==shaker resources
+  shaker_private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: {{ unique }}_net
+
+  shaker_private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      cidr: 10.0.0.0/16
+      enable_dhcp: true
+      gateway_ip: 10.0.0.1
+
+  shaker_router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external_net }
+
+  shaker_router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: shaker_router }
+      subnet_id: { get_resource: shaker_private_subnet }
+
+  shaker_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules: [
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: udp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: icmp},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: 132,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 22,
+        port_range_max: 22}]
+#==shaker resources
+
+  private_net_1:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name_1 }
+
+  private_subnet_1:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net_1 }
+      cidr: { get_param: private_net_cidr_1 }
+      gateway_ip: { get_param: private_net_gateway_1 }
+
+  private_net_2:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name_2 }
+
+  private_subnet_2:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net_2 }
+      cidr: { get_param: private_net_cidr_2 }
+      gateway_ip: { get_param: private_net_gateway_2 }
+
+  router_1:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external_net }
+
+  router_interface_1:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router_1 }
+      subnet_id: { get_resource: private_subnet_1 }
+
+  router_interface_2:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router_1 }
+      subnet_id: { get_resource: private_subnet_2 }
+
+  private_net_3:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name_3 }
+
+  private_subnet_3:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net_3 }
+      cidr: { get_param: private_net_cidr_3 }
+      gateway_ip: null
+
+{% for agent in agents.values() %}
+  {% if 'master' in agent.id %}
+
+  {{ agent.id }}_port_1:
+    type: "OS::Neutron::Port"
+    properties:
+      network_id: { get_resource: private_net_1 }
+      fixed_ips:
+        - subnet_id: { get_resource: private_subnet_1 }
+
+  {{ agent.id }}_port_3:
+    type: "OS::Neutron::Port"
+    properties:
+      network_id: { get_resource: private_net_3 }
+      fixed_ips:
+        - subnet_id: { get_resource: private_subnet_3 }
+
+  {{ agent.id }}:
+    type: OS::Nova::Server
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: {{ agent.availability_zone }}
+      networks:
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_shaker_port }
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_port_1 }
+        - port: { get_resource: {{ agent.id }}_port_3 }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash
+
+            dhclient ens4
+            ip r add $private_net_cidr_2 dev ens4 via $private_net_gateway_1
+            ip link set ens4 mtu 9000
+
+            dhclient ens5
+            ip link set ens5 mtu 9000
+
+            echo $right_vm_1_ip >> ~/right_vm_1_ip.txt
+            echo $right_vm_2_ip >> ~/right_vm_2_ip.txt
+
+            #==shaker cmd
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID --debug --log-file /var/log/shaker-agent.log
+            #==shaker cmd
+
+          params:
+            #==shaker params
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+            #==shaker params
+            "$private_net_cidr_2": { get_param: private_net_cidr_2 }
+            "$private_net_gateway_1": { get_param: private_net_gateway_1 }
+            "$right_vm_1_ip": { get_attr: [ {{ agent.slave_id }}_port_2, fixed_ips, 0, ip_address] }
+            "$right_vm_2_ip": { get_attr: [ {{ agent.slave_id }}_port_3, fixed_ips, 0, ip_address] }
+
+  {% else %}
+
+  {{ agent.id }}_port_2:
+    type: "OS::Neutron::Port"
+    properties:
+      network_id: { get_resource: private_net_2 }
+      fixed_ips:
+        - subnet_id: { get_resource: private_subnet_2 }
+
+  {{ agent.id }}_port_3:
+    type: "OS::Neutron::Port"
+    properties:
+      network_id: { get_resource: private_net_3 }
+      fixed_ips:
+        - subnet_id: { get_resource: private_subnet_3 }
+
+  {{ agent.id }}:
+    type: OS::Nova::Server
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: {{ agent.availability_zone }}
+      networks:
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_shaker_port }
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_port_2 }
+        - port: { get_resource: {{ agent.id }}_port_3 }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash
+
+            dhclient ens4
+            ip link set ens4 mtu 9000
+            ip r add $private_net_cidr_1 dev ens4 via $private_net_gateway_2
+
+            dhclient ens5
+            ip link set ens5 mtu 9000
+
+            #==shaker cmd
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID --debug --log-file /var/log/shaker-agent.log
+            #==shaker cmd
+
+          params:
+            #==shaker params
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+            #==shaker params
+            "$private_net_cidr_1": { get_param: private_net_cidr_1 }
+            "$private_net_gateway_2": { get_param: private_net_gateway_2 }
+
+  {% endif %}
+  #==shaker port
+  {{ agent.id }}_shaker_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: shaker_private_subnet }
+      security_groups:
+        - { get_resource: shaker_security_group }
+        - default
+  #==shaker port
+
+{% endfor %}
+
+outputs:
+#==shaker output
+{% for agent in agents.values() %}
+  {{ agent.id }}_instance_name:
+    value: { get_attr: [ {{ agent.id }}, instance_name ] }
+  {{ agent.id }}_ip:
+    value: { get_attr: [ {{ agent.id }}, networks, { get_attr: [shaker_private_net, name] }, 0 ] }
+{% endfor %}
+#==shaker output

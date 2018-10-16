@@ -1,0 +1,655 @@
+heat_template_version: 2015-04-30
+
+description: Autoscaling Contrail Service Instance HOT
+
+parameters:
+
+  #==shaker-params
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  external_net:
+    type: string
+    description: ID or name of external network
+  server_endpoint:
+    type: string
+    description: Server endpoint address
+  dns_nameservers:
+    type: comma_delimited_list
+    description: DNS nameservers for the subnet
+  #==shaker-params
+
+  # network policy
+  policy_name:
+    type: string
+    description: Name of the Policy
+    default: {{ unique }}_network_policy
+  simple_action:
+    type: string
+    description: Pass or Deny
+  protocol:
+    type: string
+    description: Protocol
+  src_port_end:
+    type: number
+    description: End of the Source Port Range
+  src_port_start:
+    type: number
+    description: Start of the Source Port Range
+  direction:
+    type: string
+    description: Direction of the Policy
+  dst_port_end:
+    type: number
+    description: End of the Destination Port Range
+  dst_port_start:
+    type: number
+    description: Start of the Destination Port Range
+
+  service_template_name:
+    type: string
+    description: Service template for port tuple
+    default: {{ unique }}_service_template
+  service_template_properties_version:
+    type: string
+    description: Indicates service version
+  service_template_properties_service_mode:
+    type: string
+    description: service mode
+  service_template_properties_service_type:
+    type: string
+    description: service type
+  service_template_properties_image_name:
+    type: string
+    description: Name of the image
+  service_template_properties_flavor:
+    type: string
+    description: Flavor
+  service_template_properties_ordered_interfaces:
+    type: string
+    description: Indicates service interfaces are ordered
+  service_template_properties_interface_type_service_interface_type_1:
+    type: string
+    description: service_interface_type for the ServiceTemplate
+  service_template_properties_interface_type_shared_ip_1:
+    type: boolean
+    description: shared_ip for the ServiceTemplate
+  service_template_properties_interface_type_static_route_enable_1:
+    type: boolean
+    description: static_route_enable for the ServiceTemplate
+  service_template_properties_interface_type_service_interface_type_2:
+    type: string
+    description: service_interface_type for the ServiceTemplate
+  service_template_properties_interface_type_shared_ip_2:
+    type: boolean
+    description: shared_ip for the ServiceTemplate
+  service_template_properties_interface_type_static_route_enable_2:
+    type: boolean
+    description: static_route_enable for the ServiceTemplate
+  service_template_properties_interface_type_service_interface_type_3:
+    type: string
+    description: service_interface_type for the ServiceTemplate
+  service_template_properties_interface_type_shared_ip_3:
+    type: boolean
+    description: shared_ip for the ServiceTemplate
+  service_template_properties_interface_type_static_route_enable_3:
+    type: boolean
+    description: static_route_enable for the ServiceTemplate
+  service_template_properties_service_scaling:
+    type: string
+    description: Indicates whether service scaling is enabled
+  service_template_properties_availability_zone_enable:
+    type: string
+    description: Indicates availability zone is enabled
+  service_template_properties_service_virtualization_type:
+    type: string
+    description: Indicates virtualization type
+
+  service_instance_name:
+    type: string
+    description: Service instance
+    default: {{ unique }}_service_instance
+  management_network:
+    type: string
+    description: Name of management network to be created
+    default: {{ unique }}_mgmt_VN
+  left_network:
+    type: string
+    description: Name of left network to be created
+    default: {{ unique }}_left_VN
+  right_network:
+    type: string
+    description: Name of right network to be created
+    default: {{ unique }}_right_VN
+  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_1:
+    type: string
+    description: subnet prefix for mgmt network
+  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_1:
+    type: string
+    description: subnet prefix len for mgmt network
+  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_2:
+    type: string
+    description: subnet prefix for left network
+  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_2:
+    type: string
+    description: subnet prefix len for left network
+  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_3:
+    type: string
+    description: subnet prefix for right network
+  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_3:
+    type: string
+    description: subnet prefix len for right network
+  domain:
+    type: string
+    description: Name of the Domain
+
+  service_vm_userdata:
+    type: string
+    description: cloud-init user-data to make the service VM actually function
+  service_vm_availability_zone:
+    type: string
+    description: availability zone
+
+  project:
+    type: string
+    description: project
+
+  # AutoScalingGroup parameters
+  asg_desired_capacity:
+    type: number
+  asg_max_size:
+    type: number
+  asg_min_size:
+    type: number
+
+resources:
+  template_NetworkIpam_1:
+    type: OS::ContrailV2::NetworkIpam
+    properties:
+      name: { get_param: management_network }
+
+  template_NetworkIpam_2:
+    type: OS::ContrailV2::NetworkIpam
+    properties:
+      name: { get_param: left_network }
+
+  template_NetworkIpam_3:
+    type: OS::ContrailV2::NetworkIpam
+    properties:
+      name: { get_param: right_network }
+
+  template_VirtualNetwork_1:
+    type: OS::ContrailV2::VirtualNetwork
+    depends_on: [ template_NetworkIpam_1 ]
+    properties:
+      name: { get_param: management_network }
+      network_ipam_refs: [{ get_resource: template_NetworkIpam_1 }]
+      network_ipam_refs_data:
+        [{
+          network_ipam_refs_data_ipam_subnets:
+            [{
+              network_ipam_refs_data_ipam_subnets_subnet:
+                {
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix: { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_1 },
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len: { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_1 },
+                },
+            }]
+         }]
+
+  template_VirtualNetwork_2:
+    type: OS::ContrailV2::VirtualNetwork
+    depends_on: [ template_NetworkIpam_2, template_NetworkPolicy ]
+    properties:
+      name: { get_param: left_network }
+      network_ipam_refs: [{ get_resource: template_NetworkIpam_2 }]
+      network_ipam_refs_data:
+        [{
+          network_ipam_refs_data_ipam_subnets:
+            [{
+              network_ipam_refs_data_ipam_subnets_subnet:
+                {
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix: { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_2 },
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len: { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_2 },
+                },
+            }]
+         }]
+      network_policy_refs: [{ list_join: [ ':', [{ get_param: domain}, { get_param: project}, { get_param: policy_name }] ] }]
+      network_policy_refs_data:
+        [{
+          network_policy_refs_data_sequence:
+            {
+              network_policy_refs_data_sequence_major: 0,
+              network_policy_refs_data_sequence_minor: 0,
+            },
+        }]
+
+  template_VirtualNetwork_3:
+    type: OS::ContrailV2::VirtualNetwork
+    depends_on: [ template_NetworkIpam_3, template_NetworkPolicy ]
+    properties:
+      name: { get_param: right_network }
+      network_ipam_refs: [{ get_resource: template_NetworkIpam_3 }]
+      network_ipam_refs_data:
+        [{
+          network_ipam_refs_data_ipam_subnets:
+            [{
+              network_ipam_refs_data_ipam_subnets_subnet:
+                {
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix: { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_3 },
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len: { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_3 },
+                },
+            }]
+         }]
+      network_policy_refs: [{ list_join: [ ':', [{ get_param: domain}, { get_param: project}, { get_param: policy_name }] ] }]
+      network_policy_refs_data:
+        [{
+          network_policy_refs_data_sequence:
+            {
+              network_policy_refs_data_sequence_major: 0,
+              network_policy_refs_data_sequence_minor: 0,
+            },
+        }]
+
+  template_NetworkPolicy:
+    type: OS::ContrailV2::NetworkPolicy
+    properties:
+      name: { get_param: policy_name }
+      network_policy_entries: { network_policy_entries_policy_rule: [{
+        network_policy_entries_policy_rule_direction: { get_param: direction },
+        network_policy_entries_policy_rule_protocol: { get_param: protocol },
+        network_policy_entries_policy_rule_src_ports: [{
+          network_policy_entries_policy_rule_src_ports_start_port: { get_param: src_port_start },
+          network_policy_entries_policy_rule_src_ports_end_port: { get_param: src_port_end }
+        }],
+        network_policy_entries_policy_rule_dst_ports: [{
+          network_policy_entries_policy_rule_dst_ports_start_port: { get_param: dst_port_start },
+          network_policy_entries_policy_rule_dst_ports_end_port: { get_param: dst_port_end }
+        }],
+        network_policy_entries_policy_rule_dst_addresses: [{
+          network_policy_entries_policy_rule_dst_addresses_virtual_network:
+            { list_join: [':', [{ get_param: domain}, { get_param: project}, { get_param: right_network }]] }
+        }],
+        network_policy_entries_policy_rule_src_addresses: [{
+          network_policy_entries_policy_rule_src_addresses_virtual_network:
+            { list_join: [':', [{ get_param: domain}, { get_param: project}, { get_param: left_network }]] }
+        }],
+        network_policy_entries_policy_rule_action_list: {
+          network_policy_entries_policy_rule_action_list_simple_action: { get_param: simple_action },
+          network_policy_entries_policy_rule_action_list_apply_service:
+            [{ list_join: [':', [{ get_param: domain}, { get_param: project}, { get_param: service_instance_name }]] }]
+        },
+      }]
+      }
+
+  template_ServiceTemplate:
+    type: OS::ContrailV2::ServiceTemplate
+    properties:
+      name: { get_param: service_template_name }
+      service_template_properties:
+        {
+          service_template_properties_version: { get_param: service_template_properties_version },
+          service_template_properties_service_mode: { get_param: service_template_properties_service_mode },
+          service_template_properties_service_type: { get_param: service_template_properties_service_type },
+          service_template_properties_image_name: { get_param: service_template_properties_image_name },
+          service_template_properties_service_scaling: { get_param: service_template_properties_service_scaling },
+          service_template_properties_interface_type:
+            [
+              {
+              service_template_properties_interface_type_service_interface_type: { get_param: service_template_properties_interface_type_service_interface_type_1 },
+              service_template_properties_interface_type_shared_ip: { get_param: service_template_properties_interface_type_shared_ip_1 },
+              service_template_properties_interface_type_static_route_enable: { get_param: service_template_properties_interface_type_static_route_enable_1 },
+              },
+              {
+              service_template_properties_interface_type_service_interface_type: { get_param: service_template_properties_interface_type_service_interface_type_2 },
+              service_template_properties_interface_type_shared_ip: { get_param: service_template_properties_interface_type_shared_ip_2 },
+              service_template_properties_interface_type_static_route_enable: { get_param: service_template_properties_interface_type_static_route_enable_2 },
+              },
+              {
+              service_template_properties_interface_type_service_interface_type: { get_param: service_template_properties_interface_type_service_interface_type_3 },
+              service_template_properties_interface_type_shared_ip: { get_param: service_template_properties_interface_type_shared_ip_3 },
+              service_template_properties_interface_type_static_route_enable: { get_param: service_template_properties_interface_type_static_route_enable_3 },
+              }
+            ],
+          service_template_properties_flavor: { get_param: service_template_properties_flavor },
+          service_template_properties_ordered_interfaces: { get_param: service_template_properties_ordered_interfaces },
+          service_template_properties_service_virtualization_type: { get_param: service_template_properties_service_virtualization_type },
+          service_template_properties_availability_zone_enable: { get_param: service_template_properties_availability_zone_enable },
+        }
+      domain: { get_param: domain }
+
+  template_ServiceInstance:
+    type: OS::ContrailV2::ServiceInstance
+    depends_on: [ template_ServiceTemplate ]
+    properties:
+      name: { get_param: service_instance_name }
+      service_instance_properties:
+        {
+          service_instance_properties_interface_list:
+            [
+              {
+                service_instance_properties_interface_list_virtual_network:
+                 {
+                   list_join: [':', { get_attr: [ template_VirtualNetwork_1, fq_name ] } ]
+                 },
+              },
+              {
+              service_instance_properties_interface_list_virtual_network:
+                {
+                   list_join: [':', { get_attr: [ template_VirtualNetwork_2, fq_name ] } ]
+                },
+              },
+              {
+              service_instance_properties_interface_list_virtual_network:
+                {
+                   list_join: [':', { get_attr: [ template_VirtualNetwork_3, fq_name ] } ]
+                },
+              }
+            ],
+        }
+      service_template_refs: [{ get_resource: template_ServiceTemplate }]
+
+  instance_group:
+    type: OS::Heat::AutoScalingGroup
+    properties:
+      cooldown: 0
+      desired_capacity: { get_param: asg_desired_capacity }
+      max_size: { get_param: asg_max_size }
+      min_size: { get_param: asg_min_size }
+      resource:
+        type: "https://gerrit.mtn5.cci.att.com/gitweb?p=aic-aqa-resource.git;a=blob_plain;f=aic_tests/contrail/shaker/templates/service_instance_autoscale_depends.yaml"
+        properties:
+          image: { get_param: service_template_properties_image_name }
+          flavor: { get_param: service_template_properties_flavor }
+          virtual_network_1_fqdn: { list_join: [':', { get_attr: [ template_VirtualNetwork_1, fq_name ] } ] }
+          virtual_network_2_fqdn: { list_join: [':', { get_attr: [ template_VirtualNetwork_2, fq_name ] } ] }
+          virtual_network_3_fqdn: { list_join: [':', { get_attr: [ template_VirtualNetwork_3, fq_name ] } ] }
+          service_instance_name: { list_join: [':', { get_attr: [ template_ServiceInstance, fq_name ] } ] }
+          service_interface_type_1: 'management'
+          service_interface_type_2: 'left'
+          service_interface_type_3: 'right'
+          user_data: { get_param: service_vm_userdata }
+          availability_zone: { get_param: service_vm_availability_zone }
+
+  scaleup_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: { get_resource: instance_group }
+      cooldown: 0
+      scaling_adjustment: 1
+
+  scaledown_policy:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: { get_resource: instance_group }
+      cooldown: 0
+      scaling_adjustment: -1
+
+  #==shaker resources
+  private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: {{ unique }}_net
+
+  private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net }
+      cidr: 10.0.0.0/16
+
+  router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external_net }
+
+  router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: private_subnet }
+  #==shaker resources
+
+{% for agent in agents.values() %}
+
+  {% if 'master' in agent.id %}
+    {% set us, them = ['2', '3'] %}
+    {% set master_id, slave_id = [ agent.id, agent.slave_id ] %}
+  {% else %}
+    {% set us, them = ['3', '2'] %}
+    {% set master_id, slave_id = [ agent.master_id, agent.id ] %}
+  {% endif %}
+
+  {{ agent.id }}:
+    type: OS::Nova::Server
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: "{{ agent.availability_zone }}"
+      networks:
+        #== shaker port
+        - port: { get_resource: {{ agent.id }}_port }
+        #== shaker port
+        - port: { get_resource: {{ agent.id }}_traffic_port }
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/sh
+
+            # initialize traffic interface
+            dhclient ens4
+            ip r add $PAIR_NET/$PAIR_PREFIX dev ens4
+
+            # create the scripts and files to trigger scaleup and scaledown
+            mkdir -p /opt/ctd
+            cd /opt/ctd
+
+            echo "$SCALEUP_URL" > scaleup_url.txt
+            echo "$SCALEDOWN_URL" > scaledown_url.txt
+
+            cat <<EOM > scaleup.sh
+            #!/bin/bash
+            curl -s -v -k -m 10 -X POST "$SCALEUP_URL"
+            EOM
+            chmod +x scaleup.sh
+
+            cat <<EOM > scaledown.sh
+            #!/bin/bash
+            curl -s -v -k -m 10 -X POST "$SCALEDOWN_URL"
+            EOM
+            chmod +x scaledown.sh
+
+            cat <<'EOM' > wait-for-scaling.py
+            #!/usr/bin/env python
+
+            import logging
+            import os
+            import requests
+            import sys
+            import time
+            from collections import deque
+
+            format='%(asctime)s %(levelname)-8s %(message)s'
+
+            logging.basicConfig(level=logging.DEBUG,
+                                format=format,
+                                filename='/opt/ctd/wait-for-service-instances.log')
+
+            console = logging.StreamHandler()
+            console.setLevel(logging.INFO)
+            formatter = logging.Formatter(format)
+            console.setFormatter(formatter)
+            logging.getLogger('').addHandler(console)
+
+            IP_CHECKER_HOST = "$SLAVE_IP"
+            IP_CHECKER_PORT = 12345
+            HISTORY = 15
+            try:
+                TARGET_COUNT = int(sys.argv[1])
+            except:
+                TARGET_COUNT = None
+
+            url = "http://" + IP_CHECKER_HOST + ":" + str(IP_CHECKER_PORT)
+            d = deque('', HISTORY)
+            s = set()
+            steady_state = False
+            done = False
+            scaled = False
+
+            logging.info("Detecting service instances")
+            if TARGET_COUNT:
+                logging.info("Target count: " + str(TARGET_COUNT))
+
+            while True:
+                try:
+                    # web server responds with our NAT translated source IP
+                    # (i.e. the right network IP of the service instance)
+                    r = requests.get(url, timeout=1)
+                    logging.debug(r.text)
+                    d.append(r.text)
+                except:
+                    pass
+
+                lost = s.difference(set(d))
+                found = set(d).difference(s)
+
+                for f in found:
+                    logging.info("Service instance detected: "+f)
+                for l in lost:
+                    logging.info("Service instance lost: "+l)
+
+                s = set(d)
+
+                if steady_state:
+                    if lost:
+                        logging.info("Scale down occurred")
+                        scaled = True
+                        done = True
+                    if found:
+                        logging.info("Scale up occurred")
+                        scaled = True
+                        done = True
+                else:
+                    if len(d) == HISTORY:
+                        steady_state = True
+                        logging.info("Detected " + str(len(s)) + " service instances in last " +
+                                     str(HISTORY) + " polls")
+
+                        if TARGET_COUNT and len(s) == TARGET_COUNT:
+                            done = True
+                        else:
+                            logging.info("Waiting for scaling event")
+
+                if done:
+                    if TARGET_COUNT:
+                        if len(s) != TARGET_COUNT:
+                            logging.error("Target count not reached")
+                        else:
+                            if not scaled:
+                                logging.warn("Target count reached without scaling event")
+                    logging.info("Finished with " + str(len(s)) + " service instances")
+                    exit()
+
+                time.sleep(1)
+            EOM
+            chmod +x wait-for-scaling.py
+
+            cat <<'EOM' > wait-for-scaling-or-timeout.sh
+            #!/bin/bash
+            T=${1:-120}
+            N=${2}
+            timeout $T /opt/ctd/wait-for-scaling.py $N 2>&1 || echo "Scaling not detected after $T seconds" >&2
+            EOM
+            chmod +x wait-for-scaling-or-timeout.sh
+
+
+  {% if 'master' not in agent.id %}
+            cat <<'EOM' > source-ip-checker.py
+            #!/usr/bin/env python
+
+            import BaseHTTPServer
+
+            PORT_NUMBER = 12345
+
+            class MyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+                def do_GET(s):
+                    """Respond to a GET request with IP of client."""
+                    s.send_response(200)
+                    s.send_header("Content-Type", "text/plain")
+                    s.end_headers()
+                    s.wfile.write(s.client_address[0])
+
+            if __name__ == '__main__':
+                server_class = BaseHTTPServer.HTTPServer
+                httpd = server_class(('', PORT_NUMBER), MyHandler)
+                try:
+                    httpd.serve_forever()
+                except KeyboardInterrupt:
+                    pass
+                httpd.server_close()
+            EOM
+            chmod +x source-ip-checker.py
+            ./source-ip-checker.py 2> source-ip-checker.log &
+  {% endif %}
+
+            # run the shaker agent
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID
+          params:
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+            "$PAIR_NET": { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_{{ them }} }
+            "$PAIR_PREFIX": { get_param: network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len_{{ them }} }
+            "$SCALEUP_URL": {get_attr: [scaleup_policy, alarm_url]}
+            "$SCALEDOWN_URL": {get_attr: [scaledown_policy, alarm_url]}
+            "$SLAVE_IP": { get_attr: [ {{ slave_id }}_traffic_port_ip, instance_ip_address ] }
+
+  #== shaker port
+  {{ agent.id }}_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: private_subnet }
+  #== shaker port
+
+  {{ agent.id }}_traffic_port:
+    type: OS::ContrailV2::VirtualMachineInterface
+    properties:
+      name: {{ agent.id }}_traffic_port
+      virtual_network_refs: [{ get_resource: template_VirtualNetwork_{{ us }} }]
+
+  {{ agent.id }}_traffic_port_ip:
+    type: OS::ContrailV2::InstanceIp
+    properties:
+      virtual_machine_interface_refs: [{ get_resource: {{ agent.id }}_traffic_port }]
+      virtual_network_refs: [{ get_resource: template_VirtualNetwork_{{ us }} }]
+
+{% endfor %}
+
+outputs:
+
+#==shaker output
+{% for agent in agents.values() %}
+  {% if 'master' in agent.id %}
+    {% set us, them = ['2', '3'] %}
+  {% else %}
+    {% set us, them = ['3', '2'] %}
+  {% endif %}
+
+  {{ agent.id }}_instance_name:
+    value: { get_attr: [ {{ agent.id }}, instance_name ] }
+  {{ agent.id }}_ip:
+    value: { get_attr: [ {{ agent.id }}_traffic_port_ip, instance_ip_address ] }
+{% endfor %}
+#==shaker output
+
+  scaleup_url:
+    value: {get_attr: [scaleup_policy, alarm_url]}
+  scaledown_url:
+    value: {get_attr: [scaledown_policy, alarm_url]}

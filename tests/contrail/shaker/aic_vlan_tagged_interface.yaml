@@ -1,0 +1,108 @@
+title: AIC Contrail Create VLAN Tagged Interfaces
+
+tags: contrail
+
+description:
+  Basic VLAN Tagged Interfaces scenario
+
+deployment:
+  template: templates/vlan_tagged_interface.yaml
+  env_file: env/vlan_tagged_interface.env
+  accommodation: [pair]
+
+execution:
+  tests:
+    -
+      title: Test ping over tagged interface
+      class: shell
+      script: |
+        #!/bin/bash
+        #set -x
+
+        mkdir -p /opt/ctd
+        pushd /opt/ctd
+
+        function handleResult {
+          if [ -f ctd-errors ]; then
+             printf "The following tests contained errors:\n" >> ctd-result
+             cat ctd-errors >> ctd-result
+             cat ctd-result >>/dev/stderr
+          fi
+        }
+
+        trap handleResult EXIT
+
+        cat << "EOF" > ctd-exec-test.sh
+            #!/bin/bash
+            function executeTest {
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+               printf "$1\n"
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+
+               sleep 5
+               bash -c "$1"
+
+               if [ "$?" -ne 0 ]; then
+                 echo "$1" >> ctd-errors
+               fi
+               printf "\n"
+            }
+
+            # Ping slave sub-interface IP
+            executeTest "cat /tmp/srvr_slave_sub_iface1_ip.txt | xargs ping -I ens4.201 -M do -c 5"
+            executeTest "cat /tmp/srvr_slave_sub_iface2_ip.txt | xargs ping -I ens4.202 -M do -c 5"
+        EOF
+
+        chmod 755 ctd-exec-test.sh
+        ./ctd-exec-test.sh 2>&1 | tee ctd-exec.log
+
+      sla:
+      - "[type == 'agent'] >> (stderr == '')"
+
+    -
+      title: Delete interface and Test ping over sub-interface
+      class: shell
+      script: |
+        #!/bin/bash
+        #set -x
+
+        mkdir -p /opt/ctd
+        pushd /opt/ctd
+
+        function handleResult {
+          if [ -f ctd-errors ]; then
+             printf "The following tests contained errors:\n" >> ctd-result
+             cat ctd-errors >> ctd-result
+             cat ctd-result >>/dev/stderr
+          fi
+        }
+
+        trap handleResult EXIT
+
+        cat << "EOF" > ctd-exec-test.sh
+            #!/bin/bash
+            function executeTest {
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+               printf "$1\n"
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+
+               sleep 5
+               bash -c "$1"
+
+               if [ "$?" -ne 0 ]; then
+                 echo "$1" >> ctd-errors
+               fi
+               printf "\n"
+            }
+
+            vconfig rem ens4.202
+            ip link delete ens4.202
+            # Ping slave sub-interface IP
+            executeTest "cat /tmp/srvr_slave_sub_iface1_ip.txt | xargs ping -I ens4.201 -M do -c 5"
+        EOF
+
+        chmod 755 ctd-exec-test.sh
+        ./ctd-exec-test.sh 2>&1 | tee ctd-exec.log
+
+      sla:
+      - "[type == 'agent'] >> (stderr == '')"

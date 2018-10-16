@@ -1,0 +1,71 @@
+title: AIC Contrail vProbe Port Mirroring to Analyzer in different VN
+
+tags: contrail
+
+description:
+  vProbe Port Mirroring to Analyzer in different VN scenario
+
+deployment:
+  template: templates/port_mirroring_analyzer_in_different_vn.yaml
+  env_file: env/port_mirroring_analyzer_in_different_vn.env
+  accommodation: [pair, compute_nodes: 1]
+
+execution:
+  tests:
+    -
+      title: test mirroring of data from LeftVM interface towards the Analyzer VM
+      class: shell
+      script: |
+        #!/bin/bash
+
+        left_vm_ip=`cat ~/left_vm_ip.txt`
+        right_vm_ip=`cat ~/right_vm_ip.txt`
+        analyzer_vm_ip=`cat ~/analyzer_vm_ip.txt`
+        verification_msg=`cat ~/verification_msg.txt`
+        woof_port=`cat ~/woof_port.txt`
+
+        echo `date` >> ~/start-up-ts.txt
+
+        # Send Data through TCP client from master to agent
+        curl -s http://$analyzer_vm_ip:$woof_port/capture_packets.pcap > ~/capture_packets.pcap
+        packet_count=`tcpdump -r ~/capture_packets.pcap -A 2>/dev/null | grep "$verification_msg" | wc -l`
+        echo $packet_count > ~/capture_packets_count.txt
+
+        mkdir -p /opt/ctd
+        pushd /opt/ctd
+
+        function handleResult {
+          if [ -f ctd-errors ]; then
+             printf "The following tests contained errors:\n" >> ctd-result
+             cat ctd-errors >> ctd-result
+             cat ctd-result >>/dev/stderr
+          fi
+        }
+
+        trap handleResult EXIT
+
+        cat << "EOF" > ctd-exec-test.sh
+            #!/bin/bash
+            function executeTest {
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+               printf "$1\n"
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+
+               sleep 5
+               bash -c "$1"
+
+               if [ "$?" -ne 0 ]; then
+                 echo "$1" >> ctd-errors
+               fi
+               printf "\n"
+            }
+
+            # Port mirror tests
+            executeTest "tcpdump -r ~/capture_packets.pcap -A | grep \"`cat ~/verification_msg.txt`\""
+        EOF
+
+        chmod 755 ctd-exec-test.sh
+        ./ctd-exec-test.sh 2>&1 | tee ctd-exec.log
+
+      sla:
+      - "[type == 'agent'] >> (stderr == '')"

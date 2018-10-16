@@ -1,0 +1,88 @@
+title: AIC Contrail Port Mirror with VLAN Tagged Interfaces
+
+tags: contrail
+
+description: |
+  This scenario tests the feature combination of port mirroring with a VLAN tagged subinterface.
+
+  The master and slave agents are each created with a subinterface on ens4 that connects to the same network.
+
+  The slave subinterface is configured for port mirroring.
+
+  The master has an additional port (ens5) that serves as the mirror destination.
+
+  When the master sends traffic to the slave, it is then mirrored back and captured via tcpdump.
+
+         <-------------------------------------------------^
+         |                                                 |
+         |                                                 |
+     ens5|                                                 |
+         v                                                 |
+  +------+------+                     +-------------+     port
+  |             |                     |             |    mirror
+  |    master   |                     |    slave    |      |
+  |             |                     |             |      |
+  +-----+-+-----+                     +-----+-+-----+      |
+    ens4| |ens4.201                     ens4| |ens4.201 --->
+        | |                                 | |
+        | |                                 | |
+  +-----+-|--------192.168.2.0/24-----------+-|----+
+          |                                   |
+     +----+-----------192.168.3.0/24----------+-------+
+
+deployment:
+  template: templates/vlan_tagged_interface_port_mirror.yaml
+  env_file: env/vlan_tagged_interface_port_mirror.env
+  accommodation: [pair]
+
+execution:
+  tests:
+    -
+      title: Send traffic over tagged interface and verify mirror
+      class: shell
+      script: |
+        #!/bin/bash
+        #set -x
+
+        mkdir -p /opt/ctd
+        pushd /opt/ctd
+
+        function handleResult {
+          if [ -f ctd-errors ]; then
+             printf "The following tests contained errors:\n" >> ctd-result
+             cat ctd-errors >> ctd-result
+             cat ctd-result >>/dev/stderr
+          fi
+        }
+
+        trap handleResult EXIT
+
+        cat << "EOF" > ctd-exec-test.sh
+            #!/bin/bash
+            function executeTest {
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+               printf "$1\n"
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+
+               sleep 5
+               bash -c "$1"
+
+               if [ "$?" -ne 0 ]; then
+                 echo "$1" >> ctd-errors
+               fi
+               printf "\n"
+            }
+
+            # Ping slave sub-interface IP
+            executeTest "cat /tmp/srvr_slave_sub_iface1_ip.txt | xargs ping -I ens4.201 -M do -c 5"
+            # Send some TCP traffic with a message in it
+            executeTest "echo 'hello world' | nc -w 3 `cat /tmp/srvr_slave_sub_iface1_ip.txt` 10000"
+            # Check if we got the message back on the mirror port
+            executeTest "killall tcpdump && tcpdump -nn -A -r /tmp/capture_packets.pcap | grep 'hello world'"
+        EOF
+
+        chmod 755 ctd-exec-test.sh
+        ./ctd-exec-test.sh 2>&1 | tee ctd-exec.log
+
+      sla:
+      - "[type == 'agent'] >> (stderr == '')"

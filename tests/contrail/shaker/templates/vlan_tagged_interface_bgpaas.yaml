@@ -1,0 +1,274 @@
+heat_template_version: 2015-04-30
+
+description: HOT to create VLAN tagged interface on instances
+
+parameters:
+#==shaker-params
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  external_net:
+    type: string
+    description: ID or name of external network
+  server_endpoint:
+    type: string
+    description: Server endpoint address
+  dns_nameservers:
+    type: comma_delimited_list
+    description: DNS nameservers for the subnet
+#==shaker-params
+
+  private_net_name_0:
+    type: string
+    default: {{ unique }}_parent_net
+  private_net_cidr_0:
+    type: string
+  private_net_gateway_0:
+    type: string
+  private_net_name_1:
+    type: string
+    default: {{ unique }}_bgp_net
+  private_net_cidr_1:
+    type: string
+  private_net_gateway_1:
+    type: string
+  primary_interface_1:
+    type: string
+  sub_interface_1:
+    type: string
+  vlan_tag_1:
+    type: number
+  image:
+    type: string
+  flavor:
+    type: string
+
+  #BGPaas
+  bgpaas_session_attributes_admin_down:
+    type: boolean
+    description: admin_down for the BgpAsAService
+  bgpaas_session_attributes_passive:
+    type: boolean
+    description: passive for the BgpAsAService
+  bgpaas_session_attributes_as_override:
+    type: boolean
+    description: as_override for the BgpAsAService
+  bgpaas_session_attributes_hold_time:
+    type: number
+    description: hold_time for the BgpAsAService
+  bgpaas_session_attributes_loop_count:
+    type: number
+    description: loop_count for the BgpAsAService
+  bgpaas_session_attributes_address_families_family:
+    type: string
+    description: family for the BgpAsAService
+  bgpaas_suppress_route_advertisement:
+    type: boolean
+    description: True when server should not advertise any routes to the client i.e. the client has static routes
+  bgpaas_ipv4_mapped_ipv6_nexthop:
+    type: boolean
+    description: True when client bgp implementation expects to receive a ipv4-mapped ipv6 address (as opposed to
+  autonomous_system:
+    type: number
+    description: 16 bit BGP Autonomous System number for the cluster.
+  neighbor_asn:
+    type: number
+    description: 16 bit Neighbor BGP Autonomous System number for the cluster.
+  project:
+    type: string
+    description: project for the BgpAsAService
+
+resources:
+#==shaker resources
+  shaker_private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: {{ unique }}_net
+
+  shaker_private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      cidr: 10.0.0.0/16
+      enable_dhcp: true
+      gateway_ip: 10.0.0.1
+
+  shaker_router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external_net }
+
+  shaker_router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: shaker_router }
+      subnet_id: { get_resource: shaker_private_subnet }
+
+  shaker_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules: [
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: udp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: icmp},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: 132,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 22,
+        port_range_max: 22}]
+#==shaker resources
+
+  private_net_0:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name_0 }
+
+  private_subnet_0:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net_0 }
+      cidr: { get_param: private_net_cidr_0 }
+      gateway_ip: { get_param: private_net_gateway_0 }
+
+  private_net_1:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name_1 }
+
+  private_subnet_1:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net_1 }
+      cidr: { get_param: private_net_cidr_1 }
+      gateway_ip: { get_param: private_net_gateway_1 }
+
+{% for agent in agents.values() %}
+
+  {{ agent.id }}:
+    type: OS::Nova::Server
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: "{{ agent.availability_zone }}"
+      networks:
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_shaker_port }
+        #==shaker port
+        - network: { get_resource: private_net_0 }
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash
+            #==shaker cmd
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID --debug --log-file /var/log/shaker-agent.log
+            #==shaker cmd
+            modprobe 8021q
+            echo "8021q" >> /etc/modules
+            vconfig add $primary_interface $vlan_tag_1
+            ip link set $primary_interface.$vlan_tag_1 up
+            dhclient $primary_interface
+            dhclient $primary_interface.$vlan_tag_1
+
+            echo "protocol bgp { local as $autonomous_system; neighbor $private_net_gateway_1_ip as $neighbor_asn; }" >> /etc/bird/bird.conf
+            /etc/init.d/bird restart
+            sleep 10s
+            birdc show protocol bgp1 > /tmp/bgp_route.txt
+
+          params:
+            #==shaker params
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+            #==shaker params
+            $primary_interface: { get_param: primary_interface_1 }
+            $vlan_tag_1: { get_param: vlan_tag_1 }
+            $sub_interface_1: { get_param: sub_interface_1 }
+            $private_net_gateway_1_ip: { get_param: private_net_gateway_1 }
+            $autonomous_system: { get_param: autonomous_system }
+            $neighbor_asn: { get_param: neighbor_asn }
+  #==shaker port
+  {{ agent.id }}_shaker_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: shaker_private_subnet }
+      security_groups:
+        - { get_resource: shaker_security_group }
+        - default
+  #==shaker port
+
+  {{ agent.id }}_template_VirtualMachineInterface_1:
+    type: OS::ContrailV2::VirtualMachineInterface
+    properties:
+      name: {{ agent.id }}_subinterface
+      virtual_network_refs: [{ get_resource: private_net_1 }]
+      virtual_machine_interface_properties:
+        {
+          virtual_machine_interface_properties_sub_interface_vlan_tag: { get_param: vlan_tag_1 },
+        }
+      virtual_machine_interface_mac_addresses:
+        {
+          virtual_machine_interface_mac_addresses_mac_address: [{ get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "OS-EXT-IPS-MAC:mac_addr"] }],
+        }
+      virtual_machine_interface_refs: [{ get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "port"] }]
+
+  {{ agent.id }}_BgpAsAService:
+    type: OS::ContrailV2::BgpAsAService
+    properties:
+      name: {{ agent.id }}_bgpaas
+      bgpaas_session_attributes:
+        {
+          bgpaas_session_attributes_admin_down: { get_param: bgpaas_session_attributes_admin_down },
+          bgpaas_session_attributes_passive: { get_param: bgpaas_session_attributes_passive },
+          bgpaas_session_attributes_as_override: { get_param: bgpaas_session_attributes_as_override },
+          bgpaas_session_attributes_hold_time: { get_param: bgpaas_session_attributes_hold_time },
+          bgpaas_session_attributes_loop_count: { get_param: bgpaas_session_attributes_loop_count },
+          bgpaas_session_attributes_address_families:
+            {
+              bgpaas_session_attributes_address_families_family: [{ get_param: bgpaas_session_attributes_address_families_family }],
+            },
+        }
+      display_name: {{ agent.id }}_bgpaas
+      bgpaas_suppress_route_advertisement: { get_param: bgpaas_suppress_route_advertisement }
+      bgpaas_ipv4_mapped_ipv6_nexthop: { get_param: bgpaas_ipv4_mapped_ipv6_nexthop }
+      autonomous_system: { get_param: autonomous_system }
+      project: { get_param: project }
+      virtual_machine_interface_refs: [{ get_resource: {{ agent.id }}_template_VirtualMachineInterface_1 }]
+
+  {{ agent.id }}_instanceIP_1_1:
+    type: OS::ContrailV2::InstanceIp
+    depends_on: [ {{ agent.id }}_template_VirtualMachineInterface_1, private_subnet_1 ]
+    properties:
+      virtual_network_refs: [{ get_resource: private_net_1 }]
+      virtual_machine_interface_refs: [{ get_resource: {{ agent.id }}_template_VirtualMachineInterface_1 }]
+
+  {% endfor %}
+
+outputs:
+#==shaker output
+{% for agent in agents.values() %}
+  {{ agent.id }}_instance_name:
+    value: { get_attr: [ {{ agent.id }}, instance_name ] }
+  {{ agent.id }}_ip:
+    value: { get_attr: [ {{ agent.id }}, networks, { get_attr: [shaker_private_net, name] }, 0 ] }
+  {{ agent.id }}_mac:
+    value: { get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "OS-EXT-IPS-MAC:mac_addr"] }
+  {{ agent.id }}_port_uuid:
+    value: { get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "port"] }
+{% endfor %}
+#==shaker output

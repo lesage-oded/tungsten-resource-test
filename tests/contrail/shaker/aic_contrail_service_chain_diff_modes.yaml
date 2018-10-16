@@ -1,0 +1,20 @@
+title: Contrail service chain
+
+tags: contrail
+
+description:
+  Tests 3 types of Contrail service modes in one service chain
+
+deployment:
+  template: templates/service_chain_diff_modes.yaml
+  env_file: env/service_chain_diff_modes.env
+  accommodation: [pair, compute_nodes: 1]
+
+execution:
+  tests:
+    -
+      title: contrail service chain
+      class: iperf3
+      sla:
+      - "[type == 'agent'] >> (stats.bandwidth.avg > 1000)"
+

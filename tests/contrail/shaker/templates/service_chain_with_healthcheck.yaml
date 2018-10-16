@@ -1,0 +1,539 @@
+heat_template_version: 2013-05-23
+
+description: |
+
+  This Heat template creates three parallel service chains between left and
+  right networks.
+
+               left                   right
+                 vn     +--------+    vn
+                  +---->| svc vm |+---->
+                  |    *| (icmp) |     |
+                  |     +--------+     |                      +--------------+
+                  |                    |                      |health checks |
+  +--------+      |     +--------+     |      +--------+      |--------------|
+  | master |+----->---->| svc vm |+---->----->| slave  |      | X  = failed  |
+  | (left) |**    |    *| (tcp)  |     |     *|(right) |      | *  = passed  |
+  +--------+      |     +--------+     |      +--------+      | ** = multiple|
+                  |                    |                      +--------------+
+                  |     +--------+     |
+                  +---->| svc vm |+---->
+                       X| (udp)  |
+                        +--------+
+
+  The master agent is connected to the left network, and the slave is
+  connected to the right network.
+
+  The service VMs are configured to perform NAT on left-to-right traffic.
+
+  A network policy is used to send TCP traffic through one service instance,
+  UDP traffic through another, and ICMP through the third.
+
+  A PING health-check policy is applied to the left interface of each service
+  instance. The same healthcheck is also applied to the master and slave VMs.
+
+  A second PING health-check policy is applied to the master VM only.
+
+  The UDP service VM is intentionally configured to ignore pings, causing the
+  health check to fail, and the port to be disabled.
+
+  Therefore, left-to-right TCP and ICMP traffic will be successful, and UDP
+  traffic will be dropped.
+
+parameters:
+#==shaker-params
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  external_net:
+    type: string
+    description: ID or name of external network
+  server_endpoint:
+    type: string
+    description: Server endpoint address
+  dns_nameservers:
+    type: comma_delimited_list
+    description: DNS nameservers for the subnet
+#==shaker-params
+
+#==shaker resource params
+  mgmt_net_cidr:
+    type: string
+    default: 192.168.1.0/24
+
+  mgmt_net_gateway:
+    type: string
+    default: 192.168.1.1
+#==shaker resource params
+
+  # Contrail Health Check Parameters
+  service_health_check_properties_delay:
+    type: number
+    description: Time in seconds at which health check is repeated
+    default: 2
+  service_health_check_properties_timeout:
+    type: number
+    description: Time in seconds to wait for response
+    default: 2
+  service_health_check_properties_max_retries:
+    type: number
+    description: Number of failures before declaring health bad
+    default: 2
+
+  vm_health_check_properties_delay:
+    type: number
+    description: Time in seconds at which health check is repeated
+    default: 5
+  vm_health_check_properties_timeout:
+    type: number
+    description: Time in seconds to wait for response
+    default: 5
+  vm_health_check_properties_max_retries:
+    type: number
+    description: Number of failures before declaring health bad
+    default: 2
+
+  # IP addresses
+  left_net_v4:
+    type: string
+    description: Private IPv4 subnet prefix
+    default: 1.1.1.0
+  left_net_v4_len:
+    type: string
+    description: Private IPv4 subnet length
+    default: 24
+
+  right_net_v4:
+    type: string
+    description: Private IPv4 subnet address
+    default: 2.2.2.0
+  right_net_v4_len:
+    type: string
+    description: Private IPv4 subnet length
+    default: 24
+
+# service instance parameters
+  si_availability_zone:
+    type: string
+    description: availability zone
+
+# health check interface
+  svc_hc_interface:
+    type: string
+    description: Service interface to which to apply healthcheck
+    constraints:
+    - allowed_values: [ left, right ]
+    default: left
+
+  # domain and project to build fq_names
+  domain:
+    type: string
+    default: default-domain
+
+  project:
+    type: string
+
+  # fq_name of default security group
+  # (i.e. default-domain:{projectname}:default)
+  project_default_security_group_fq_name:
+    type: string
+
+resources:
+
+# network policy used to send traffic to the service instances
+
+# note: it is important to manually construct the fq_name
+# of the service instance, and the left and right networks,
+# rather than use get_resource, which doesn't work
+
+  network_policy:
+    type: OS::ContrailV2::NetworkPolicy
+    properties:
+      name: {{ unique }}_network_policy
+      network_policy_entries:
+        network_policy_entries_policy_rule:
+{% for protocol in [ 'udp', 'tcp', 'icmp' ] %}
+        - network_policy_entries_policy_rule_action_list:
+            network_policy_entries_policy_rule_action_list_simple_action: pass
+            network_policy_entries_policy_rule_action_list_apply_service:
+            - { "Fn::Join": [ ':', [ { get_param: domain },
+                { get_param: project },
+                {{ unique }}_{{ protocol }}_service_instance ] ] }
+          network_policy_entries_policy_rule_direction: '<>'
+          network_policy_entries_policy_rule_protocol: {{ protocol }}
+          network_policy_entries_policy_rule_src_addresses:
+          - network_policy_entries_policy_rule_src_addresses_virtual_network:
+              { "Fn::Join": [ ':', [ { get_param: domain }, { get_param: project },
+                {{ unique }}_left_net ] ] }
+          network_policy_entries_policy_rule_dst_addresses:
+          - network_policy_entries_policy_rule_dst_addresses_virtual_network:
+              { "Fn::Join": [ ':', [ { get_param: domain }, { get_param: project },
+                {{ unique }}_right_net ] ] }
+          network_policy_entries_policy_rule_src_ports:
+          - network_policy_entries_policy_rule_src_ports_start_port: -1
+            network_policy_entries_policy_rule_src_ports_end_port: -1
+          network_policy_entries_policy_rule_dst_ports:
+          - network_policy_entries_policy_rule_dst_ports_start_port: -1
+            network_policy_entries_policy_rule_dst_ports_end_port: -1
+{% endfor %}
+
+# security group
+
+  server_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: {{ unique }}_server_security_group
+      rules:
+      - { remote_ip_prefix: 0.0.0.0/0 }
+
+# network_ipam required to create virtual networks
+
+  network_ipam:
+    type: OS::ContrailV2::NetworkIpam
+    properties:
+      name: {{ unique }}_network_ipam
+
+# create the left and right networks
+
+{% for side in ['left', 'right'] %}
+
+  {{ side }}_net:
+    type: OS::ContrailV2::VirtualNetwork
+    properties:
+      name: {{ unique }}_{{ side }}_net
+      network_ipam_refs: [{ get_resource: network_ipam }]
+      network_ipam_refs_data:
+      - network_ipam_refs_data_ipam_subnets:
+        - network_ipam_refs_data_ipam_subnets_subnet:
+            network_ipam_refs_data_ipam_subnets_subnet_ip_prefix: { get_param: {{ side }}_net_v4 }
+            network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len: { get_param: {{ side }}_net_v4_len }
+          network_ipam_refs_data_ipam_subnets_addr_from_start: true
+      network_policy_refs: [{ get_resource: network_policy }]
+      network_policy_refs_data:
+      - network_policy_refs_data_sequence:
+          network_policy_refs_data_sequence_major: 0
+          network_policy_refs_data_sequence_minor: 0
+
+# create the left and right service VM interfaces
+
+  {% for protocol in [ 'udp', 'tcp', 'icmp' ] %}
+
+  {{ protocol }}_svm_{{ side }}_vmi:
+    type: OS::ContrailV2::VirtualMachineInterface
+    properties:
+      name: {{ unique }}_{{ protocol }}_svm_{{ side }}_vmi
+      port_security_enabled: false
+      security_group_refs: []
+      virtual_network_refs: [{ get_resource: {{ side }}_net }]
+      virtual_machine_interface_properties:
+        virtual_machine_interface_properties_service_interface_type: {{ side }}
+      port_tuple_refs: [{ get_resource: {{ protocol }}_port_tuple }]
+
+  {{ protocol }}_svm_{{ side }}_v4_instance_ip:
+    type: OS::ContrailV2::InstanceIp
+    properties:
+      name: {{ unique }}_{{ protocol }}_svm_{{ side }}_v4_iip
+      instance_ip_family: v4
+      virtual_machine_interface_refs: [{ get_resource: {{ protocol }}_svm_{{ side }}_vmi }]
+      virtual_network_refs: [{ get_resource: {{ side }}_net }]
+
+  {% endfor %}
+
+{% endfor %}
+
+# Service Template
+  service_template:
+    type: OS::ContrailV2::ServiceTemplate
+    properties:
+      name: {{ unique }}_service_template
+      service_template_properties:
+        service_template_properties_version: 2
+        service_template_properties_service_mode: in-network-nat
+        service_template_properties_service_type: firewall
+        service_template_properties_interface_type:
+          - service_template_properties_interface_type_service_interface_type: left
+          - service_template_properties_interface_type_service_interface_type: right
+        service_template_properties_ordered_interfaces: true
+      domain: default-domain
+
+# Create three separate service instances
+{% for protocol in [ 'udp', 'tcp', 'icmp' ] %}
+
+# Service Instance
+  {{ protocol }}_service_instance:
+    type: OS::ContrailV2::ServiceInstance
+    properties:
+      name: {{ unique }}_{{ protocol }}_service_instance
+      service_instance_properties:
+        service_instance_properties_interface_list:
+        - service_instance_properties_interface_list_virtual_network:
+            { "Fn::Join": [ ':', [ { get_param: domain }, { get_param: project }, {{ unique }}_left_net ] ] }
+        - service_instance_properties_interface_list_virtual_network:
+            { "Fn::Join": [ ':', [ { get_param: domain }, { get_param: project }, {{ unique }}_right_net ] ] }
+      service_template_refs: [{ get_resource: service_template }]
+
+# Port Tuple
+  {{ protocol }}_port_tuple:
+    type: OS::ContrailV2::PortTuple
+    properties:
+      name: {{ unique }}_{{ protocol }}_vmi_tuple
+      service_instance: { get_resource: {{ protocol }}_service_instance }
+
+# Service VM
+# NOTE: the udp_service_vm ignores pings requests
+# net.ipv4.icmp_echo_ignore_all = 1
+  {{ protocol }}_service_vm:
+    type: OS::Nova::Server
+    depends_on: [ {{ protocol }}_svm_left_v4_instance_ip, {{ protocol }}_svm_right_v4_instance_ip ]
+    properties:
+      name: {{ unique }}_{{ protocol }}_service_vm
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: { get_param: si_availability_zone }
+      networks:
+        - port: { get_resource: {{ protocol }}_svm_left_vmi }
+        - port: { get_resource: {{ protocol }}_svm_right_vmi }
+      user_data_format: RAW
+      user_data: |
+        #!/bin/bash
+        sysctl -w net.ipv4.ip_forward=1
+        dhclient ens4
+        iptables -t nat -A POSTROUTING -o ens4 -j MASQUERADE
+        iptables -A FORWARD -i ens3 -o ens4 -m state --state RELATED,ESTABLISHED -j ACCEPT
+        iptables -A FORWARD -i ens4 -o ens3 -j ACCEPT
+  {% if protocol == 'udp' %}
+        sysctl -w net.ipv4.icmp_echo_ignore_all=1
+  {% endif %}
+{% endfor %}
+
+  # health check for the service instance
+  ping_health_check:
+    type: OS::ContrailV2::ServiceHealthCheck
+    depends_on: [ udp_service_vm, tcp_service_vm, icmp_service_vm ]
+    properties:
+      name: {{ unique }}_ping_health_check
+      service_health_check_properties:
+        service_health_check_properties_enabled: true
+        service_health_check_properties_health_check_type: link-local
+        service_health_check_properties_monitor_type: PING
+        service_health_check_properties_delay: { get_param: service_health_check_properties_delay }
+        service_health_check_properties_timeout: { get_param: service_health_check_properties_timeout }
+        service_health_check_properties_max_retries: { get_param: service_health_check_properties_max_retries }
+        service_health_check_properties_url_path: local-ip
+      service_instance_refs:
+      - { get_resource: udp_service_instance }
+      - { get_resource: tcp_service_instance }
+      - { get_resource: icmp_service_instance }
+      service_instance_refs_data:
+      - service_instance_refs_data_interface_type: { get_param: svc_hc_interface }
+      - service_instance_refs_data_interface_type: { get_param: svc_hc_interface }
+      - service_instance_refs_data_interface_type: { get_param: svc_hc_interface }
+
+  # health check for the master vm only
+  ping_health_check_vm:
+    type: OS::ContrailV2::ServiceHealthCheck
+    properties:
+      name: {{ unique }}_ping_health_check_vm
+      service_health_check_properties:
+        service_health_check_properties_enabled: true
+        service_health_check_properties_health_check_type: link-local
+        service_health_check_properties_monitor_type: PING
+        service_health_check_properties_delay: { get_param: vm_health_check_properties_delay }
+        service_health_check_properties_timeout: { get_param: vm_health_check_properties_timeout }
+        service_health_check_properties_max_retries: { get_param: vm_health_check_properties_max_retries }
+        service_health_check_properties_url_path: local-ip
+
+#==shaker resources
+  mgmt_net:
+    type: OS::Neutron::Net
+    properties:
+      name: {{ unique }}_mgmt_net
+
+  mgmt_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      name: {{ unique }}_mgmt_net
+      network_id: { get_resource: mgmt_net }
+      cidr: { get_param: mgmt_net_cidr }
+      enable_dhcp: true
+      gateway_ip: { get_param: mgmt_net_gateway }
+
+  router:
+    type: OS::Neutron::Router
+    properties:
+      name: {{ unique }}_router
+      external_gateway_info:
+        network: { get_param: external_net }
+
+  router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: mgmt_subnet }
+
+  # snippet to enable the management interface on the agent
+  # and set a static route for the shaker server endpoint
+  enable_agent_mgmt_if:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      config:
+        str_replace:
+          template: |
+            #!/bin/sh
+            dhclient ens4
+            ip r add $SERVER_ENDPOINT_IP/32 via $GATEWAY_IP
+          params:
+            "$SERVER_ENDPOINT_IP": { "Fn::Select": [ 0, { "Fn::Split": [ ":" , { get_param: server_endpoint} ] }]}
+            "$GATEWAY_IP": { get_param: mgmt_net_gateway }
+#==shaker resources
+
+  create_healthcheck_verification_script:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      config: |
+        #!/bin/bash
+        mkdir -p /opt/ctd
+        cat << "EOF" > /opt/ctd/verify-healthcheck
+        #!/bin/bash
+        #
+        # Verify that between MIN and MAX "initial pings"
+        # (i.e. ICMP echo request packets with sequence id 1)
+        # are received within DURATION seconds.
+        #
+        # Usage: verify-healthcheck DURATION MIN MAX [INTERFACE]
+        set -e
+
+        usage() {
+          echo "Usage: verify-healthcheck DURATION MIN MAX [INTERFACE]" >&2
+          exit 1
+        }
+
+        if [[ $# -lt 3 ]]; then usage; fi
+
+        duration=$1
+        min=$2
+        max=$3
+        interface=$4
+
+        EXIT_STATUS=0
+        PCAP=probes.pcap
+        TEXT=probes.txt
+
+        err() {
+          echo "verify-healthcheck:" ${@:-"Unknown error"} >&2
+          EXIT_STATUS=1
+        }
+
+        tcpdump_args="-Q in -w ${PCAP}"
+        if [[ -n "${interface}" ]]; then
+          tcpdump_args="${tcpdump_args} -i ${interface}"
+        fi
+
+        echo "Expecting between ${min} and ${max} probes in ${duration} seconds"
+        timeout --preserve-status ${duration} tcpdump ${tcpdump_args} "icmp[icmptype]==8 and icmp[6:2]==1"
+        count=$(tcpdump -nn -e -r ${PCAP} 2>/dev/null | tee ${TEXT} | wc -l)
+        echo "Received ${count} probes"
+        if [[ ${count} -lt ${min} ]]; then
+          err "Received too few probes: (${count} < ${min})"
+        elif [[ ${count} -gt ${max} ]]; then
+          err "Received too many probes: (${count} > ${max})"
+        elif [[ ${min} -le ${count} && ${count} -le ${max} ]]; then
+          echo "Success! (${min} <= ${count} <= ${max})"
+        else
+          err "Error processing results"
+        fi
+        cat ${TEXT} || err "Error displaying results"
+        exit $EXIT_STATUS
+        EOF
+        chmod +x /opt/ctd/verify-healthcheck
+
+{% for agent in agents.values() %}
+
+  {% if 'master' in agent.id %}
+    {% set us, them = ['left', 'right'] %}
+  {% else %}
+    {% set us, them = ['right', 'left'] %}
+  {% endif %}
+
+  {{ agent.id }}_run_shaker:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config:
+        str_replace:
+          template: |
+            #!/bin/sh
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID
+          params:
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+
+  {{ agent.id }}_server_init:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: { get_resource: enable_agent_mgmt_if }
+      - config: { get_resource: create_healthcheck_verification_script }
+      - config: { get_resource: {{ agent.id }}_run_shaker }
+
+#== shaker port
+  {{ agent.id }}_vmi:
+    type: OS::ContrailV2::VirtualMachineInterface
+    depends_on: [ udp_service_vm, tcp_service_vm, icmp_service_vm ]
+    properties:
+      name: {{ agent.id }}_{{ us }}_vmi
+      virtual_network_refs: [{ get_resource: {{ us }}_net }]
+      service_health_check_refs:
+      - { get_resource: ping_health_check }
+  {% if 'master' in agent.id %}
+      - { get_resource: ping_health_check_vm }
+  {% endif %}
+      port_security_enabled: true
+      security_group_refs:
+        - { get_resource: server_security_group }
+        - { get_param: project_default_security_group_fq_name }
+      # NOTE:
+      # the annotation is what allows the service healthcheck to be applied
+      # to the service VM and non-service VM at the same time.
+      #  _service_vm_: False
+      annotations:
+        annotations_key_value_pair:
+        - annotations_key_value_pair_key: _service_vm_
+          annotations_key_value_pair_value: False
+
+  {{ agent.id }}_v4_instance_ip:
+    type: OS::ContrailV2::InstanceIp
+    properties:
+      instance_ip_family: v4
+      virtual_machine_interface_refs: [{ get_resource: {{ agent.id }}_vmi }]
+      virtual_network_refs: [{ get_resource: {{ us }}_net }]
+#== shaker port
+
+  {{ agent.id }}:
+    type: OS::Nova::Server
+    depends_on: {{ agent.id }}_v4_instance_ip
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: {{ agent.availability_zone }}
+      networks:
+      - port: { get_resource: {{ agent.id }}_vmi }
+      - network: { get_resource: mgmt_net }
+      user_data_format: SOFTWARE_CONFIG
+      user_data: { get_resource: {{ agent.id }}_server_init }
+
+{% endfor %}
+
+outputs:
+{% for agent in agents.values() %}
+  {{ agent.id }}_instance_name:
+    description: {{ agent.id }} Instance Name
+    value: { get_attr: [ {{ agent.id }}, instance_name ] }
+  {{ agent.id }}_ip:
+    description: {{ agent.id }} IP address
+    value: { get_attr: [ {{ agent.id }}_v4_instance_ip, instance_ip_address ] }
+{% endfor %}

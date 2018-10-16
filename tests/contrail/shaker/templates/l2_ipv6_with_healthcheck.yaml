@@ -1,0 +1,210 @@
+heat_template_version: 2013-05-23
+
+description:
+  This Heat template creates a new Neutron network, a router to the external
+  network and plugs instances into this new network. All instances are located
+  in the same L2 domain. The network is dual-stack, and a Contrail ping health
+  check is applied.
+
+parameters:
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  external_net:
+    type: string
+    description: ID or name of external network
+  server_endpoint:
+    type: string
+    description: Server endpoint address
+  dns_nameservers:
+    type: comma_delimited_list
+    description: DNS nameservers for the subnet
+
+  # Contrail Health Check Parameters
+  service_health_check_properties_enabled:
+    type: boolean
+    description: Administratively enable or disable this health check.
+    default: true
+  service_health_check_properties_delay:
+    type: number
+    description: Time in seconds at which health check is repeated
+    default: 3
+  service_health_check_properties_timeout:
+    type: number
+    description: Time in seconds to wait for response
+    default: 5
+  service_health_check_properties_max_retries:
+    type: number
+    description: Number of failures before declaring health bad
+    default: 2
+
+  # IP addresses
+  private_net_v4:
+    type: string
+    description: Private IPv4 subnet address
+    default: 10.0.0.0/16
+  private_net_v4_gateway:
+    type: string
+    description: Private IPv4 network gateway address
+    default: 10.0.0.1
+  private_net_v6:
+    type: string
+    description: Private IPv6 subnet address
+    default: 2001:db8:cafe:1e::/64
+  private_net_v6_gateway:
+    type: string
+    description: Private IPv6 network gateway address
+    default: 2001:db8:cafe:1e::1
+
+  # fq_name of default security group
+  # (i.e. default-domain:{projectname}:default)
+  project_default_security_group_fq_name:
+    type: string
+
+resources:
+  private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: {{ unique }}_net
+
+  private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net }
+      cidr: { get_param: private_net_v4 }
+      enable_dhcp: true
+      gateway_ip: { get_param: private_net_v4_gateway }
+
+  private_v6_subnet:
+    type: OS::Neutron::Subnet
+    depends_on: private_subnet
+    properties:
+      ip_version: 6
+      network: { get_resource: private_net }
+      cidr: { get_param: private_net_v6 }
+      gateway_ip: { get_param: private_net_v6_gateway }
+
+  router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external_net }
+
+  router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: private_subnet }
+
+  router_interface_v6:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router: { get_resource: router }
+      subnet: { get_resource: private_v6_subnet }
+
+  server_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules: [
+        {remote_ip_prefix: 0.0.0.0/0},
+        {remote_ip_prefix: "::/0",
+        ethertype: IPv6}]
+
+  ping_health_check:
+    type: OS::ContrailV2::ServiceHealthCheck
+    properties:
+      name: {{ unique }}_ping_health_check
+      service_health_check_properties:
+        {
+          service_health_check_properties_enabled: { get_param: service_health_check_properties_enabled },
+          service_health_check_properties_health_check_type: link-local,
+          service_health_check_properties_monitor_type: PING,
+          service_health_check_properties_delay: { get_param: service_health_check_properties_delay },
+          service_health_check_properties_timeout: { get_param: service_health_check_properties_timeout },
+          service_health_check_properties_max_retries: { get_param: service_health_check_properties_max_retries },
+          service_health_check_properties_url_path: local-ip,
+        }
+
+  interface_enable_ipv6_dhcp:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      config: |
+        #!/bin/sh
+        sudo /sbin/dhclient -1 -6 -pf /run/dhclient6.ens3.pid \
+        -lf /var/lib/dhcp/dhclient6.ens3.leases -I \
+        -df /var/lib/dhcp/dhclient.ens3.leases ens3
+
+{% for agent in agents.values() %}
+
+  {{ agent.id }}_run_shaker:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config:
+        str_replace:
+          template: |
+            #!/bin/sh
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID
+          params:
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+
+  {{ agent.id }}_server_init:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: { get_resource: interface_enable_ipv6_dhcp }
+      - config: { get_resource: {{ agent.id }}_run_shaker }
+
+  {{ agent.id }}_port:
+    type: OS::ContrailV2::VirtualMachineInterface
+    depends_on: [ private_subnet, private_v6_subnet ]
+    properties:
+      virtual_network_refs: [{ get_resource: private_net }]
+      service_health_check_refs: [{ get_resource: ping_health_check }]
+      security_group_refs:
+        - { get_resource: server_security_group }
+        - { get_param: project_default_security_group_fq_name }
+
+  {{ agent.id }}_v6_instance_ip:
+    type: OS::ContrailV2::InstanceIp
+    properties:
+      instance_ip_family: v6
+      virtual_machine_interface_refs: [{ get_resource: {{ agent.id }}_port }]
+      virtual_network_refs: [{ get_resource: private_net }]
+
+  {{ agent.id }}:
+    type: OS::Nova::Server
+    depends_on: {{ agent.id }}_v6_instance_ip
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: {{ agent.availability_zone }}
+      networks:
+        - port: { get_resource: {{ agent.id }}_port }
+      user_data_format: SOFTWARE_CONFIG
+      user_data: { get_resource: {{ agent.id }}_server_init }
+
+  {{ agent.id }}_v4_instance_ip:
+    type: OS::ContrailV2::InstanceIp
+    depends_on: {{ agent.id }}
+    properties:
+      instance_ip_family: v4
+      virtual_machine_interface_refs: [{ get_resource: {{ agent.id }}_port }]
+      virtual_network_refs: [{ get_resource: private_net }]
+
+{% endfor %}
+
+outputs:
+{% for agent in agents.values() %}
+  {{ agent.id }}_instance_name:
+    description: {{ agent.id }} Instance Name
+    value: { get_attr: [ {{ agent.id }}, instance_name ] }
+  {{ agent.id }}_ip:
+    description: {{ agent.id }} IPv6 Address
+    value: { get_attr: [ {{ agent.id }}, first_address ] }
+{% endfor %}

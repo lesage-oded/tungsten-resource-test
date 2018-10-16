@@ -1,0 +1,64 @@
+title: AIC Contrail Port Mirroring to a pProbe
+
+tags: contrail
+
+description:
+  pProbe Port Mirroring scenario
+
+deployment:
+  template: templates/port_mirroring_analyzer_pProbe.yaml
+  env_file: env/port_mirroring_analyzer_pProbe.env
+  accommodation: [pair, compute_nodes: 1]
+
+execution:
+  tests:
+    -
+      title: test mirroring of data from vRouter interface towards a pProbe
+      class: shell
+      script: |
+        #!/bin/bash
+
+        mkdir -p /opt/ctd
+        pushd /opt/ctd
+
+        function handleResult {
+          if [ -f ctd-errors ]; then
+             printf "The following tests contained errors:\n" >> ctd-result
+             cat ctd-errors >> ctd-result
+             cat ctd-result >>/dev/stderr
+          fi
+        }
+
+        trap handleResult EXIT
+
+        cat << "EOF" > ctd-exec-test.sh
+            #!/bin/bash
+
+            left_vm_ip=`cat ~/left_vm_ip.txt`
+            right_vm_ip=`cat ~/right_vm_ip.txt`
+            verification_msg=`cat ~/verification_msg.txt`
+
+            function executeTest {
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+               printf "$1\n"
+               printf '%*s\n' "${COLUMNS:-$(tput cols)}" '' | tr ' ' -
+
+               sleep 5
+               bash -c "$1"
+
+               if [ "$?" -ne 0 ]; then
+                 echo "$1" >> ctd-errors
+               fi
+               printf "\n"
+            }
+
+            # NOTE: No real verification tests are possible as it is not feasible to capture the traffic on
+            # the underlay vlan.2004 port. As agreed with Frida, verification part can be done offline
+            executeTest "echo $right_vm_ip | xargs ping -M do -c 5"
+        EOF
+
+        chmod 755 ctd-exec-test.sh
+        ./ctd-exec-test.sh 2>&1 | tee ctd-exec.log
+
+      sla:
+      - "[type == 'agent'] >> (stderr == '')"

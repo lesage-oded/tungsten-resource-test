@@ -1,0 +1,22 @@
+title: AIC Contrail L2 IPv6 ping with health check
+
+tags: contrail
+
+description:
+  In this scenario Shaker launches 1 pair of instances in the same tenant
+  network. The traffic goes within the tenant network (L2 domain). The
+  network is dual-stack, and a Contrail ping health check is applied.
+
+deployment:
+  template: templates/l2_ipv6_with_healthcheck.yaml
+  env_file: env/l2_ipv6_with_healthcheck.env
+  accommodation: [pair]
+
+execution:
+  tests:
+  -
+    title: Ping
+    class: flent
+    method: ping
+    sla:
+    - '[type == ''agent''] >> (stats.ping_icmp.avg < 2.0)'

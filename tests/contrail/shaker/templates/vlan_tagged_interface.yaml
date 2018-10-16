@@ -1,0 +1,381 @@
+heat_template_version: 2015-04-30
+
+description: HOT to create VLAN tagged interface on instances
+
+parameters:
+#==shaker-params
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  external_net:
+    type: string
+    description: ID or name of external network
+  server_endpoint:
+    type: string
+    description: Server endpoint address
+  dns_nameservers:
+    type: comma_delimited_list
+    description: DNS nameservers for the subnet
+#==shaker-params
+
+  private_net_name_0:
+    type: string
+    default: {{ unique }}_trunk-parent-network
+  private_net_cidr_0:
+    type: string
+  private_net_gateway_0:
+    type: string
+  private_net_name_1:
+    type: string
+    default: {{ unique }}_trunk-child1-network
+  private_net_cidr_1:
+    type: string
+  private_net_gateway_1:
+    type: string
+  private_net_name_2:
+    type: string
+    default: {{ unique }}_trunk-child2-network
+  private_net_cidr_2:
+    type: string
+  private_net_gateway_2:
+    type: string
+  primary_interface_1:
+    type: string
+  primary_interface_2:
+    type: string
+  sub_interface_1:
+    type: string
+  sub_interface_2:
+    type: string
+  vlan_tag_1:
+    type: number
+  vlan_tag_2:
+    type: number
+  image:
+    type: string
+  flavor:
+    type: string
+
+resources:
+#==shaker resources
+  shaker_private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: {{ unique }}_net
+
+  shaker_private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      cidr: 10.0.0.0/16
+      enable_dhcp: true
+      gateway_ip: 10.0.0.1
+
+  shaker_router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external_net }
+
+  shaker_router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: shaker_router }
+      subnet_id: { get_resource: shaker_private_subnet }
+
+  shaker_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules: [
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: udp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: icmp},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: 132,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 22,
+        port_range_max: 22}]
+#==shaker resources
+
+  private_net_0:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name_0 }
+
+  private_subnet_0:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net_0 }
+      cidr: { get_param: private_net_cidr_0 }
+      gateway_ip: { get_param: private_net_gateway_0 }
+
+  private_net_1:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name_1 }
+
+  private_subnet_1:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net_1 }
+      cidr: { get_param: private_net_cidr_1 }
+      gateway_ip: { get_param: private_net_gateway_1 }
+
+  private_net_2:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: private_net_name_2 }
+
+  private_subnet_2:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: private_net_2 }
+      cidr: { get_param: private_net_cidr_2 }
+      gateway_ip: { get_param: private_net_gateway_2 }
+
+{% for agent in agents.values() %}
+  {% if 'master' in agent.id %}
+
+  {{ agent.id }}:
+    type: OS::Nova::Server
+    depends_on: [ {{ agent.slave_id }}_instanceIP_1_2 ]
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: "{{ agent.availability_zone }}"
+      networks:
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_shaker_port }
+        #==shaker port
+        - network: { get_resource: private_net_0 }
+        #==external port
+        #- network: { get_param: external_net }
+        #==external port
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash
+            #==shaker cmd
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID --debug --log-file /var/log/shaker-agent.log
+            #==shaker cmd
+            sudo -i
+            apt-get install vlan
+            modprobe 8021q
+            echo "8021q" >> /etc/modules
+            vconfig add $primary_interface $vlan_tag_1
+            vconfig add $primary_interface $vlan_tag_2
+            ip link set $primary_interface.$vlan_tag_1 up
+            ip link set $primary_interface.$vlan_tag_2 up
+            sudo dhclient $primary_interface
+            sudo dhclient $primary_interface.$vlan_tag_1
+            sudo dhclient $primary_interface.$vlan_tag_2
+
+            echo $peer_node_sub_iface1_ip >> /tmp/srvr_slave_sub_iface1_ip.txt
+            echo $peer_node_sub_iface2_ip >> /tmp/srvr_slave_sub_iface2_ip.txt
+
+          params:
+            #==shaker params
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+            #==shaker params
+            $primary_interface: { get_param: primary_interface_1 }
+            $vlan_tag_1: { get_param: vlan_tag_1 }
+            $vlan_tag_2: { get_param: vlan_tag_2 }
+            $sub_interface_1: { get_param: sub_interface_1 }
+            $sub_interface_2: { get_param: sub_interface_2 }
+            $peer_node_sub_iface1_ip: { get_attr: [ {{ agent.slave_id}}_instanceIP_1_2, instance_ip_address] }
+            $peer_node_sub_iface2_ip: { get_attr: [ {{ agent.slave_id}}_instanceIP_2_2, instance_ip_address] }
+  #==shaker port
+  {{ agent.id }}_shaker_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: shaker_private_subnet }
+      security_groups:
+        - { get_resource: shaker_security_group }
+        - default
+  #==shaker port
+
+  {{ agent.id }}_template_VirtualMachineInterface_1:
+    type: OS::ContrailV2::VirtualMachineInterface
+    properties:
+      name: {{ agent.id }}_leftSUB_201
+      virtual_network_refs: [{ get_resource: private_net_1 }]
+      virtual_machine_interface_properties:
+        {
+          virtual_machine_interface_properties_sub_interface_vlan_tag: { get_param: vlan_tag_1 },
+        }
+      virtual_machine_interface_mac_addresses:
+        {
+          virtual_machine_interface_mac_addresses_mac_address: [{ get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "OS-EXT-IPS-MAC:mac_addr"] }],
+        }
+      virtual_machine_interface_refs: [{ get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "port"] }]
+
+  {{ agent.id }}_template_VirtualMachineInterface_21:
+    type: OS::ContrailV2::VirtualMachineInterface
+    properties:
+      name: {{ agent.id }}_leftSUB_202
+      virtual_network_refs: [{ get_resource: private_net_2 }]
+      virtual_machine_interface_properties:
+        {
+          virtual_machine_interface_properties_sub_interface_vlan_tag: { get_param: vlan_tag_2 },
+        }
+      virtual_machine_interface_mac_addresses:
+        {
+          virtual_machine_interface_mac_addresses_mac_address: [{ get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "OS-EXT-IPS-MAC:mac_addr"] }],
+        }
+      virtual_machine_interface_refs: [{ get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "port"] }]
+
+  {{ agent.id }}_instanceIP_1_1:
+    type: OS::ContrailV2::InstanceIp
+    depends_on: [ {{ agent.id }}_template_VirtualMachineInterface_1, private_subnet_1 ]
+    properties:
+      virtual_network_refs: [{ get_resource: private_net_1 }]
+      virtual_machine_interface_refs: [{ get_resource: {{ agent.id }}_template_VirtualMachineInterface_1 }]
+
+  {{ agent.id }}_instanceIP_2_1:
+    type: OS::ContrailV2::InstanceIp
+    depends_on: [ {{ agent.id }}_template_VirtualMachineInterface_21, private_subnet_2 ]
+    properties:
+      virtual_network_refs: [{ get_resource: private_net_2 }]
+      virtual_machine_interface_refs: [{ get_resource: {{ agent.id }}_template_VirtualMachineInterface_21 }]
+
+  {% else %}
+
+  {{ agent.id }}:
+    type: OS::Nova::Server
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: "{{ agent.availability_zone }}"
+      networks:
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_shaker_port }
+        #==shaker port
+        - network: { get_resource: private_net_0 }
+        #==external port
+        #- network: { get_param: external_net }
+        #==external port
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash
+            #==shaker cmd
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID --debug --log-file /var/log/shaker-agent.log
+            #==shaker cmd
+            sudo -i
+            apt-get install vlan
+            modprobe 8021q
+            echo "8021q" >> /etc/modules
+            vconfig add $primary_interface $vlan_tag_1
+            vconfig add $primary_interface $vlan_tag_2
+            ip link set $primary_interface.$vlan_tag_1 up
+            ip link set $primary_interface.$vlan_tag_2 up
+            sudo dhclient $primary_interface
+            sudo dhclient $primary_interface.$vlan_tag_1
+            sudo dhclient $primary_interface.$vlan_tag_2
+
+            HOST_IFACE=$primary_interface.$vlan_tag
+            node_sub_iface_ip=$(ip addr | awk "/inet/ && /${HOST_IFACE}/{sub(/\/.*$/,\"\",\$2); print \$2}")
+
+            echo $node_sub_iface_ip >> /tmp/srvr_slave_sub_iface_ip.txt
+          params:
+            #==shaker params
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+            #==shaker params
+            $primary_interface: { get_param: primary_interface_2 }
+            $vlan_tag_1: { get_param: vlan_tag_1 }
+            $vlan_tag_2: { get_param: vlan_tag_2 }
+            $sub_interface_1: { get_param: sub_interface_1 }
+            $sub_interface_2: { get_param: sub_interface_2 }
+
+  #==shaker port
+  {{ agent.id }}_shaker_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: shaker_private_subnet }
+      security_groups:
+        - { get_resource: shaker_security_group }
+        - default
+  #==shaker port
+
+  {{ agent.id }}_template_VirtualMachineInterface_2:
+    type: OS::ContrailV2::VirtualMachineInterface
+    properties:
+      name: {{ agent.id }}_rightSUB_201
+      virtual_network_refs: [{ get_resource: private_net_1 }]
+      virtual_machine_interface_properties:
+        {
+          virtual_machine_interface_properties_sub_interface_vlan_tag: { get_param: vlan_tag_1 },
+        }
+      virtual_machine_interface_mac_addresses:
+        {
+        virtual_machine_interface_mac_addresses_mac_address: [{ get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "OS-EXT-IPS-MAC:mac_addr"] }]
+        }
+      virtual_machine_interface_refs: [{ get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "port"] }]
+
+  {{ agent.id }}_template_VirtualMachineInterface_22:
+    type: OS::ContrailV2::VirtualMachineInterface
+    properties:
+      name: {{ agent.id }}_rightSUB_202
+      virtual_network_refs: [{ get_resource: private_net_2 }]
+      virtual_machine_interface_properties:
+        {
+          virtual_machine_interface_properties_sub_interface_vlan_tag: { get_param: vlan_tag_2 },
+        }
+      virtual_machine_interface_mac_addresses:
+        {
+        virtual_machine_interface_mac_addresses_mac_address: [{ get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "OS-EXT-IPS-MAC:mac_addr"] }]
+        }
+      virtual_machine_interface_refs: [{ get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "port"] }]
+
+  {{ agent.id }}_instanceIP_1_2:
+    type: OS::ContrailV2::InstanceIp
+    depends_on: [ {{ agent.id }}_template_VirtualMachineInterface_2, private_subnet_1 ]
+    properties:
+      virtual_network_refs: [{ get_resource: private_net_1 }]
+      virtual_machine_interface_refs: [{ get_resource: {{ agent.id }}_template_VirtualMachineInterface_2 }]
+
+  {{ agent.id }}_instanceIP_2_2:
+    type: OS::ContrailV2::InstanceIp
+    depends_on: [ {{ agent.id }}_template_VirtualMachineInterface_22, private_subnet_2 ]
+    properties:
+      virtual_network_refs: [{ get_resource: private_net_2 }]
+      virtual_machine_interface_refs: [{ get_resource: {{ agent.id }}_template_VirtualMachineInterface_22 }]
+
+  {% endif %}
+{% endfor %}
+
+
+outputs:
+#==shaker output
+{% for agent in agents.values() %}
+  {{ agent.id }}_instance_name:
+    value: { get_attr: [ {{ agent.id }}, instance_name ] }
+  {{ agent.id }}_ip:
+    value: { get_attr: [ {{ agent.id }}, networks, { get_attr: [shaker_private_net, name] }, 0 ] }
+  {{ agent.id }}_mac:
+    value: { get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "OS-EXT-IPS-MAC:mac_addr"] }
+  {{ agent.id }}_port_uuid:
+    value: { get_attr: [{{ agent.id }}, addresses, get_param: private_net_name_0, 0, "port"] }
+{% endfor %}
+#==shaker output

@@ -1,0 +1,1146 @@
+heat_template_version: 2013-05-23
+
+###############################################################################
+# Test-setup
+###############################################################################
+#                     | Parent vDNS |
+#                   /                 \
+#                 /                     \
+#        | Parent IPAM |            | Child vDNS |  ----  | Child IPAM |
+#               |                                                 |
+#        | Parent VN |                                    | Child VN |
+#               |                                                 |
+#        | Parent VM |                                    | Child VM |
+###############################################################################
+
+description: >
+  HOT template to create a VirtualDns:
+
+parameters:
+#==shaker-params
+  image:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  external_net:
+    type: string
+    description: ID or name of external network
+  server_endpoint:
+    type: string
+    description: Server endpoint address
+  dns_nameservers:
+    type: comma_delimited_list
+    description: DNS nameservers for the subnet
+#==shaker-params
+
+  # General Parameters
+  flavor:
+    type: string
+    description: name for the VirtualDns
+    # required: optional
+  image:
+    type: string
+    description: name for the VirtualDns
+    # required: optional
+  availability_zone:
+    type: string
+    description: name for the VirtualDns
+    # required: optional
+
+  # vDNS parameters
+  parent_vdns_name:
+    type: string
+    description: name for the VirtualDns
+    # required: optional
+    default: '{{ unique | replace("_", "") }}parentVirtualDns'
+  parent_vdns_fq_name:
+    type: string
+    description: fq_name for the VirtualDns
+    # required: optional
+    default: 'default-domain:{{ unique | replace("_", "") }}parentVirtualDns'
+  parent_vdns_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+    default: '{{ unique }}_parentVirtualDns'
+  parent_virtual_DNS_data_domain_name:
+    type: string
+    description: Default domain name for this virtual DNS server
+    # operations: CRUD
+    # required: true
+  parent_virtual_DNS_data_dynamic_records_from_client:
+    type: boolean
+    description: Allow automatic addition of records on VM launch, default is True
+    # operations: CRUD
+    # required: optional
+  parent_virtual_DNS_data_record_order:
+    type: string
+    description: Order of DNS load balancing, fixed, random, round-robin
+    # operations: CRUD
+    # required: optional
+  parent_virtual_DNS_data_default_ttl_seconds:
+    type: number
+    description: Default Time To Live for DNS records
+    # operations: CRUD
+    # required: optional
+  parent_virtual_DNS_data_next_virtual_DNS:
+    type: string
+    description: Next virtual DNS server to lookup if record is not found. Default is proxy to infrastructure DNS
+    # operations: CRUD
+    # required: optional
+  parent_virtual_DNS_data_floating_ip_record:
+    type: string
+    description: Decides how floating ip records are added
+    # operations: CRUD
+    # required: optional
+  parent_virtual_DNS_data_external_visible:
+    type: boolean
+    description: Currently this option is not supported
+    # operations: CRUD
+    # required: optional
+  parent_virtual_DNS_data_reverse_resolution:
+    type: boolean
+    description: Allow reverse DNS resolution, ip to name mapping
+    # operations: CRUD
+    # required: optional
+  parent_vdns_domain:
+    type: string
+    description: domain for the VirtualDns
+    # required: optional
+
+  # vDNS record parameters
+  parent_vdns_type_a_record_name:
+    type: string
+    description: name for the VirtualDnsRecord
+    # required: optional
+  parent_vdns_type_a_virtual_DNS_record_data_record_name:
+    type: string
+    description: DNS name to be resolved
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_a_virtual_DNS_record_data_record_data:
+    type: string
+    description: DNS record data is either ip address or string depending on type
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_a_virtual_DNS_record_data_record_ttl_seconds:
+    type: number
+    description: Time To Live for this DNS record
+    # operations: CRUD
+    # required: optional
+  parent_vdns_type_a_record_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+
+  parent_vdns_type_aaaa_record_name:
+    type: string
+    description: name for the VirtualDnsRecord
+    # required: optional
+  parent_vdns_type_aaaa_virtual_DNS_record_data_record_name:
+    type: string
+    description: DNS name to be resolved
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_aaaa_virtual_DNS_record_data_record_data:
+    type: string
+    description: DNS record data is either ip address or string depending on type
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_aaaa_virtual_DNS_record_data_record_ttl_seconds:
+    type: number
+    description: Time To Live for this DNS record
+    # operations: CRUD
+    # required: optional
+  parent_vdns_type_aaaa_record_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+
+  parent_vdns_type_cname_record_name:
+    type: string
+    description: name for the VirtualDnsRecord
+    # required: optional
+  parent_vdns_type_cname_virtual_DNS_record_data_record_name:
+    type: string
+    description: DNS name to be resolved
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_cname_virtual_DNS_record_data_record_data:
+    type: string
+    description: DNS record data is either ip address or string depending on type
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_cname_virtual_DNS_record_data_record_ttl_seconds:
+    type: number
+    description: Time To Live for this DNS record
+    # operations: CRUD
+    # required: optional
+  parent_vdns_type_cname_record_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+
+  parent_vdns_type_mx_record_name:
+    type: string
+    description: name for the VirtualDnsRecord
+    # required: optional
+  parent_vdns_type_mx_virtual_DNS_record_data_record_name:
+    type: string
+    description: DNS name to be resolved
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_mx_virtual_DNS_record_data_record_data:
+    type: string
+    description: DNS record data is either ip address or string depending on type
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_mx_virtual_DNS_record_data_record_ttl_seconds:
+    type: number
+    description: Time To Live for this DNS record
+    # operations: CRUD
+    # required: optional
+  parent_vdns_type_mx_virtual_DNS_record_data_record_mx_preference:
+    type: number
+    description: record_mx_preference for the VirtualDnsRecord
+    # operations: CRUD
+    # required: optional
+  parent_vdns_type_mx_record_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+
+  parent_vdns_type_ptr_record_name:
+    type: string
+    description: name for the VirtualDnsRecord
+    # required: optional
+  parent_vdns_type_ptr_virtual_DNS_record_data_record_name:
+    type: string
+    description: DNS name to be resolved
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_ptr_virtual_DNS_record_data_record_data:
+    type: string
+    description: DNS record data is either ip address or string depending on type
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_ptr_virtual_DNS_record_data_record_ttl_seconds:
+    type: number
+    description: Time To Live for this DNS record
+    # operations: CRUD
+    # required: optional
+  parent_vdns_type_ptr_record_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+
+  parent_vdns_type_ns_record_name:
+    type: string
+    description: name for the VirtualDnsRecord
+    # required: optional
+  parent_vdns_type_ns_virtual_DNS_record_data_record_name:
+    type: string
+    description: DNS name to be resolved
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_ns_virtual_DNS_record_data_record_data:
+    type: string
+    description: DNS record data is either ip address or string depending on type
+    # operations: CRUD
+    # required: true
+  parent_vdns_type_ns_virtual_DNS_record_data_record_ttl_seconds:
+    type: number
+    description: Time To Live for this DNS record
+    # operations: CRUD
+    # required: optional
+  parent_vdns_type_ns_record_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+
+  network_ipam_refs_data_ipam_subnets_addr_from_start_true:
+    type: string
+    description: name for the VirtualDns
+    # required: optional
+
+  # IPAM-1 parameters
+  parent_ipam_1_name:
+    type: string
+    description: name for the NetworkIpam
+    # required: optional
+    default: {{ unique }}_parent_ipam_1
+  parent_ipam_1_network_ipam_mgmt_cidr_block_ip_prefix:
+    type: string
+    description: ip_prefix for the NetworkIpam
+    # operations: CRUD
+    # required: optional
+  parent_ipam_1_network_ipam_mgmt_cidr_block_ip_prefix_len:
+    type: number
+    description: ip_prefix_len for the NetworkIpam
+    # operations: CRUD
+    # required: optional
+  parent_ipam_1_network_ipam_mgmt_cidr_block_vn_1_ip_prefix:
+    type: string
+    description: ip_prefix for the NetworkIpam
+    # operations: CRUD
+    # required: optional
+  parent_ipam_1_network_ipam_mgmt_cidr_block_vn_1_ip_prefix_len:
+    type: number
+    description: ip_prefix_len for the NetworkIpam
+    # operations: CRUD
+    # required: optional
+  parent_ipam_1_network_ipam_mgmt_cidr_block_vn_1_gw:
+    type: string
+    description: ip_prefix for the NetworkIpam
+    # operations: CRUD
+    # required: optional
+
+  parent_ipam_1_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+    default: {{ unique }}_parent_ipam_1
+  parent_ipam_1_project:
+    type: string
+    description: project for the NetworkIpam
+    # required: optional
+
+  # vDNS parameters
+  child_vdns_name:
+    type: string
+    description: name for the VirtualDns
+    # required: optional
+    default: '{{ unique | replace("_", "") }}child1VirtualDns'
+  child_vdns_fq_name:
+    type: string
+    description: fq_name for the VirtualDns
+    # required: optional
+    default: 'default-domain:{{ unique | replace("_", "") }}child1VirtualDns'
+  child_vdns_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+    default: '{{ unique }}_child1VirtualDns'
+  child_virtual_DNS_data_domain_name:
+    type: string
+    description: Default domain name for this virtual DNS server
+    # operations: CRUD
+    # required: true
+  child_virtual_DNS_data_dynamic_records_from_client:
+    type: boolean
+    description: Allow automatic addition of records on VM launch, default is True
+    # operations: CRUD
+    # required: optional
+  child_virtual_DNS_data_record_order:
+    type: string
+    description: Order of DNS load balancing, fixed, random, round-robin
+    # operations: CRUD
+    # required: optional
+  child_virtual_DNS_data_default_ttl_seconds:
+    type: number
+    description: Default Time To Live for DNS records
+    # operations: CRUD
+    # required: optional
+  child_virtual_DNS_data_next_virtual_DNS:
+    type: string
+    description: Next virtual DNS server to lookup if record is not found. Default is proxy to infrastructure DNS
+    # operations: CRUD
+    # required: optional
+  child_virtual_DNS_data_floating_ip_record:
+    type: string
+    description: Decides how floating ip records are added
+    # operations: CRUD
+    # required: optional
+  child_virtual_DNS_data_external_visible:
+    type: boolean
+    description: Currently this option is not supported
+    # operations: CRUD
+    # required: optional
+  child_virtual_DNS_data_reverse_resolution:
+    type: boolean
+    description: Allow reverse DNS resolution, ip to name mapping
+    # operations: CRUD
+    # required: optional
+  child_vdns_domain:
+    type: string
+    description: domain for the VirtualDns
+    # required: optional
+
+  # vDNS record parameters
+  child_vdns_type_a_record_name:
+    type: string
+    description: name for the VirtualDnsRecord
+    # required: optional
+  child_vdns_type_a_virtual_DNS_record_data_record_name:
+    type: string
+    description: DNS name to be resolved
+    # operations: CRUD
+    # required: true
+  child_vdns_type_a_virtual_DNS_record_data_record_data:
+    type: string
+    description: DNS record data is either ip address or string depending on type
+    # operations: CRUD
+    # required: true
+  child_vdns_type_a_virtual_DNS_record_data_record_ttl_seconds:
+    type: number
+    description: Time To Live for this DNS record
+    # operations: CRUD
+    # required: optional
+  child_vdns_type_a_record_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+
+  child_vdns_type_aaaa_record_name:
+    type: string
+    description: name for the VirtualDnsRecord
+    # required: optional
+  child_vdns_type_aaaa_virtual_DNS_record_data_record_name:
+    type: string
+    description: DNS name to be resolved
+    # operations: CRUD
+    # required: true
+  child_vdns_type_aaaa_virtual_DNS_record_data_record_data:
+    type: string
+    description: DNS record data is either ip address or string depending on type
+    # operations: CRUD
+    # required: true
+  child_vdns_type_aaaa_virtual_DNS_record_data_record_ttl_seconds:
+    type: number
+    description: Time To Live for this DNS record
+    # operations: CRUD
+    # required: optional
+  child_vdns_type_aaaa_record_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+
+  child_vdns_type_cname_record_name:
+    type: string
+    description: name for the VirtualDnsRecord
+    # required: optional
+  child_vdns_type_cname_virtual_DNS_record_data_record_name:
+    type: string
+    description: DNS name to be resolved
+    # operations: CRUD
+    # required: true
+  child_vdns_type_cname_virtual_DNS_record_data_record_data:
+    type: string
+    description: DNS record data is either ip address or string depending on type
+    # operations: CRUD
+    # required: true
+  child_vdns_type_cname_virtual_DNS_record_data_record_ttl_seconds:
+    type: number
+    description: Time To Live for this DNS record
+    # operations: CRUD
+    # required: optional
+  child_vdns_type_cname_record_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+
+  child_vdns_type_mx_record_name:
+    type: string
+    description: name for the VirtualDnsRecord
+    # required: optional
+  child_vdns_type_mx_virtual_DNS_record_data_record_name:
+    type: string
+    description: DNS name to be resolved
+    # operations: CRUD
+    # required: true
+  child_vdns_type_mx_virtual_DNS_record_data_record_data:
+    type: string
+    description: DNS record data is either ip address or string depending on type
+    # operations: CRUD
+    # required: true
+  child_vdns_type_mx_virtual_DNS_record_data_record_ttl_seconds:
+    type: number
+    description: Time To Live for this DNS record
+    # operations: CRUD
+    # required: optional
+  child_vdns_type_mx_virtual_DNS_record_data_record_mx_preference:
+    type: number
+    description: record_mx_preference for the VirtualDnsRecord
+    # operations: CRUD
+    # required: optional
+  child_vdns_type_mx_record_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+
+  child_vdns_type_ptr_record_name:
+    type: string
+    description: name for the VirtualDnsRecord
+    # required: optional
+  child_vdns_type_ptr_virtual_DNS_record_data_record_name:
+    type: string
+    description: DNS name to be resolved
+    # operations: CRUD
+    # required: true
+  child_vdns_type_ptr_virtual_DNS_record_data_record_data:
+    type: string
+    description: DNS record data is either ip address or string depending on type
+    # operations: CRUD
+    # required: true
+  child_vdns_type_ptr_virtual_DNS_record_data_record_ttl_seconds:
+    type: number
+    description: Time To Live for this DNS record
+    # operations: CRUD
+    # required: optional
+  child_vdns_type_ptr_record_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+
+  # IPAM-1 parameters
+  child_ipam_1_name:
+    type: string
+    description: name for the NetworkIpam
+    # required: optional
+    default: {{ unique }}_child_ipam_1
+  child_ipam_1_network_ipam_mgmt_cidr_block_ip_prefix:
+    type: string
+    description: ip_prefix for the NetworkIpam
+    # operations: CRUD
+    # required: optional
+  child_ipam_1_network_ipam_mgmt_cidr_block_ip_prefix_len:
+    type: number
+    description: ip_prefix_len for the NetworkIpam
+    # operations: CRUD
+    # required: optional
+  child_ipam_1_network_ipam_mgmt_cidr_block_vn_1_ip_prefix:
+    type: string
+    description: ip_prefix for the NetworkIpam
+    # operations: CRUD
+    # required: optional
+  child_ipam_1_network_ipam_mgmt_cidr_block_vn_1_ip_prefix_len:
+    type: number
+    description: ip_prefix_len for the NetworkIpam
+    # operations: CRUD
+    # required: optional
+  child_ipam_1_network_ipam_mgmt_cidr_block_vn_1_gw:
+    type: string
+    description: Ip prefix/len format prefix
+    # operations: CRUD
+    # required: optional
+  child_ipam_1_display_name:
+    type: string
+    description: Display name user configured string(name) that can be updated any time. Used as openstack name.
+    # operations: CRUD
+    # required: optional
+    default: {{ unique }}_child_ipam_1
+  child_ipam_1_project:
+    type: string
+    description: project for the NetworkIpam
+    # required: optional
+
+resources:
+#==shaker resources
+  shaker_private_net:
+    type: OS::Neutron::Net
+    properties:
+      name: {{ unique }}_net
+
+  shaker_private_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      cidr: 10.0.0.0/16
+      enable_dhcp: true
+      gateway_ip: 10.0.0.1
+
+  shaker_router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: external_net }
+
+  shaker_router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: shaker_router }
+      subnet_id: { get_resource: shaker_private_subnet }
+
+  shaker_security_group:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules: [
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: udp,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: icmp},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: 132,
+        port_range_min: 1,
+        port_range_max: 65535},
+        {remote_ip_prefix: 0.0.0.0/0,
+        protocol: tcp,
+        port_range_min: 22,
+        port_range_max: 22}]
+#==shaker resources
+
+  parentVirtualDns:
+    type: OS::ContrailV2::VirtualDns
+    properties:
+      name: { get_param: parent_vdns_name }
+      fq_name: { get_param: parent_vdns_fq_name }
+      display_name: { get_param: parent_vdns_display_name }
+      virtual_DNS_data:
+        {
+          virtual_DNS_data_domain_name: { get_param: parent_virtual_DNS_data_domain_name },
+          virtual_DNS_data_dynamic_records_from_client: { get_param: parent_virtual_DNS_data_dynamic_records_from_client },
+          virtual_DNS_data_record_order: { get_param: parent_virtual_DNS_data_record_order },
+          virtual_DNS_data_default_ttl_seconds: { get_param: parent_virtual_DNS_data_default_ttl_seconds },
+          virtual_DNS_data_next_virtual_DNS: { get_param: parent_virtual_DNS_data_next_virtual_DNS },
+          virtual_DNS_data_floating_ip_record: { get_param: parent_virtual_DNS_data_floating_ip_record },
+          virtual_DNS_data_external_visible: { get_param: parent_virtual_DNS_data_external_visible },
+          virtual_DNS_data_reverse_resolution: { get_param: parent_virtual_DNS_data_reverse_resolution },
+        }
+      domain: { get_param: parent_vdns_domain }
+
+  child1VirtualDns:
+    type: OS::ContrailV2::VirtualDns
+    properties:
+      name: { get_param: child_vdns_name }
+      fq_name: { get_param: child_vdns_fq_name }
+      display_name: { get_param: child_vdns_display_name }
+      virtual_DNS_data:
+        {
+          virtual_DNS_data_domain_name: { get_param: child_virtual_DNS_data_domain_name },
+          virtual_DNS_data_dynamic_records_from_client: { get_param: child_virtual_DNS_data_dynamic_records_from_client },
+          virtual_DNS_data_record_order: { get_param: child_virtual_DNS_data_record_order },
+          virtual_DNS_data_default_ttl_seconds: { get_param: child_virtual_DNS_data_default_ttl_seconds },
+          virtual_DNS_data_next_virtual_DNS: { get_param: child_virtual_DNS_data_next_virtual_DNS },
+          virtual_DNS_data_floating_ip_record: { get_param: child_virtual_DNS_data_floating_ip_record },
+          virtual_DNS_data_external_visible: { get_param: child_virtual_DNS_data_external_visible },
+          virtual_DNS_data_reverse_resolution: { get_param: child_virtual_DNS_data_reverse_resolution },
+        }
+      domain: { get_param: child_vdns_domain }
+
+  parent_type_A_VirtualDnsRecord:
+    type: OS::ContrailV2::VirtualDnsRecord
+    depends_on: [ parentVirtualDns ]
+    properties:
+      name: { get_param: parent_vdns_type_a_record_name }
+      virtual_DNS_record_data:
+        {
+          virtual_DNS_record_data_record_name: { get_param: parent_vdns_type_a_virtual_DNS_record_data_record_name },
+          virtual_DNS_record_data_record_type: "A",
+          virtual_DNS_record_data_record_class: "IN",
+          virtual_DNS_record_data_record_data: { get_param: parent_vdns_type_a_virtual_DNS_record_data_record_data },
+          virtual_DNS_record_data_record_ttl_seconds: { get_param: parent_vdns_type_a_virtual_DNS_record_data_record_ttl_seconds },
+        }
+      display_name: { get_param: parent_vdns_type_a_record_display_name }
+      virtual_DNS: { get_resource: parentVirtualDns }
+
+  parent_type_AAAA_VirtualDnsRecord:
+    type: OS::ContrailV2::VirtualDnsRecord
+    depends_on: [ parentVirtualDns ]
+    properties:
+      name: { get_param: parent_vdns_type_aaaa_record_name }
+      virtual_DNS_record_data:
+        {
+          virtual_DNS_record_data_record_name: { get_param: parent_vdns_type_aaaa_virtual_DNS_record_data_record_name },
+          virtual_DNS_record_data_record_type: "AAAA",
+          virtual_DNS_record_data_record_class: "IN",
+          virtual_DNS_record_data_record_data: { get_param: parent_vdns_type_aaaa_virtual_DNS_record_data_record_data },
+          virtual_DNS_record_data_record_ttl_seconds: { get_param: parent_vdns_type_aaaa_virtual_DNS_record_data_record_ttl_seconds },
+        }
+      display_name: { get_param: parent_vdns_type_aaaa_record_display_name }
+      virtual_DNS: { get_resource: parentVirtualDns }
+
+  parent_type_CNAME_VirtualDnsRecord:
+    type: OS::ContrailV2::VirtualDnsRecord
+    depends_on: [ parentVirtualDns ]
+    properties:
+      name: { get_param: parent_vdns_type_cname_record_name }
+      virtual_DNS_record_data:
+        {
+          virtual_DNS_record_data_record_name: { get_param: parent_vdns_type_cname_virtual_DNS_record_data_record_name },
+          virtual_DNS_record_data_record_type: "CNAME",
+          virtual_DNS_record_data_record_class: "IN",
+          virtual_DNS_record_data_record_data: { get_param: parent_vdns_type_cname_virtual_DNS_record_data_record_data },
+          virtual_DNS_record_data_record_ttl_seconds: { get_param: parent_vdns_type_cname_virtual_DNS_record_data_record_ttl_seconds },
+        }
+      display_name: { get_param: parent_vdns_type_cname_record_display_name }
+      virtual_DNS: { get_resource: parentVirtualDns }
+
+  parent_type_MX_VirtualDnsRecord:
+    type: OS::ContrailV2::VirtualDnsRecord
+    depends_on: [ parentVirtualDns ]
+    properties:
+      name: { get_param: parent_vdns_type_mx_record_name }
+      virtual_DNS_record_data:
+        {
+          virtual_DNS_record_data_record_name: { get_param: parent_vdns_type_mx_virtual_DNS_record_data_record_name },
+          virtual_DNS_record_data_record_type: "MX",
+          virtual_DNS_record_data_record_class: "IN",
+          virtual_DNS_record_data_record_data: { get_param: parent_vdns_type_mx_virtual_DNS_record_data_record_data },
+          virtual_DNS_record_data_record_ttl_seconds: { get_param: parent_vdns_type_mx_virtual_DNS_record_data_record_ttl_seconds },
+          virtual_DNS_record_data_record_mx_preference: { get_param: parent_vdns_type_mx_virtual_DNS_record_data_record_mx_preference },
+        }
+      display_name: { get_param: parent_vdns_type_mx_record_display_name }
+      virtual_DNS: { get_resource: parentVirtualDns }
+
+  parent_type_PTR_VirtualDnsRecord:
+    type: OS::ContrailV2::VirtualDnsRecord
+    depends_on: [ parentVirtualDns ]
+    properties:
+      name: { get_param: parent_vdns_type_ptr_record_name }
+      virtual_DNS_record_data:
+        {
+          virtual_DNS_record_data_record_name: { get_param: parent_vdns_type_ptr_virtual_DNS_record_data_record_name },
+          virtual_DNS_record_data_record_type: "PTR",
+          virtual_DNS_record_data_record_class: "IN",
+          virtual_DNS_record_data_record_data: { get_param: parent_vdns_type_ptr_virtual_DNS_record_data_record_data },
+          virtual_DNS_record_data_record_ttl_seconds: { get_param: parent_vdns_type_ptr_virtual_DNS_record_data_record_ttl_seconds },
+        }
+      display_name: { get_param: parent_vdns_type_ptr_record_display_name }
+      virtual_DNS: { get_resource: parentVirtualDns }
+
+  parent_type_NS_VirtualDnsRecord:
+    type: OS::ContrailV2::VirtualDnsRecord
+    depends_on: [ parentVirtualDns, child1VirtualDns ]
+    properties:
+      name: { get_param: parent_vdns_type_ns_record_name }
+      virtual_DNS_record_data:
+        {
+          virtual_DNS_record_data_record_name: { get_param: parent_vdns_type_ns_virtual_DNS_record_data_record_name },
+          virtual_DNS_record_data_record_type: "NS",
+          virtual_DNS_record_data_record_class: "IN",
+          virtual_DNS_record_data_record_data: { get_param: child_vdns_fq_name },
+          virtual_DNS_record_data_record_ttl_seconds: { get_param: parent_vdns_type_ns_virtual_DNS_record_data_record_ttl_seconds },
+        }
+      display_name: { get_param: parent_vdns_type_ns_record_display_name }
+      virtual_DNS: { get_resource: parentVirtualDns }
+
+  child_type_A_VirtualDnsRecord:
+    type: OS::ContrailV2::VirtualDnsRecord
+    depends_on: [ parentVirtualDns, child1VirtualDns ]
+    properties:
+      name: { get_param: child_vdns_type_a_record_name }
+      virtual_DNS_record_data:
+        {
+          virtual_DNS_record_data_record_name: { get_param: child_vdns_type_a_virtual_DNS_record_data_record_name },
+          virtual_DNS_record_data_record_type: "A",
+          virtual_DNS_record_data_record_class: "IN",
+          virtual_DNS_record_data_record_data: { get_param: child_vdns_type_a_virtual_DNS_record_data_record_data },
+          virtual_DNS_record_data_record_ttl_seconds: { get_param: child_vdns_type_a_virtual_DNS_record_data_record_ttl_seconds },
+        }
+      display_name: { get_param: child_vdns_type_a_record_display_name }
+      virtual_DNS: { get_resource: child1VirtualDns }
+
+  child_type_AAAA_VirtualDnsRecord:
+    type: OS::ContrailV2::VirtualDnsRecord
+    depends_on: [ parentVirtualDns, child1VirtualDns ]
+    properties:
+      name: { get_param: child_vdns_type_aaaa_record_name }
+      virtual_DNS_record_data:
+        {
+          virtual_DNS_record_data_record_name: { get_param: child_vdns_type_aaaa_virtual_DNS_record_data_record_name },
+          virtual_DNS_record_data_record_type: "AAAA",
+          virtual_DNS_record_data_record_class: "IN",
+          virtual_DNS_record_data_record_data: { get_param: child_vdns_type_aaaa_virtual_DNS_record_data_record_data },
+          virtual_DNS_record_data_record_ttl_seconds: { get_param: child_vdns_type_aaaa_virtual_DNS_record_data_record_ttl_seconds },
+        }
+      display_name: { get_param: child_vdns_type_aaaa_record_display_name }
+      virtual_DNS: { get_resource: child1VirtualDns }
+
+  child_type_CNAME_VirtualDnsRecord:
+    type: OS::ContrailV2::VirtualDnsRecord
+    depends_on: [ parentVirtualDns, child1VirtualDns ]
+    properties:
+      name: { get_param: child_vdns_type_cname_record_name }
+      virtual_DNS_record_data:
+        {
+          virtual_DNS_record_data_record_name: { get_param: child_vdns_type_cname_virtual_DNS_record_data_record_name },
+          virtual_DNS_record_data_record_type: "CNAME",
+          virtual_DNS_record_data_record_class: "IN",
+          virtual_DNS_record_data_record_data: { get_param: child_vdns_type_cname_virtual_DNS_record_data_record_data },
+          virtual_DNS_record_data_record_ttl_seconds: { get_param: child_vdns_type_cname_virtual_DNS_record_data_record_ttl_seconds },
+        }
+      display_name: { get_param: child_vdns_type_cname_record_display_name }
+      virtual_DNS: { get_resource: child1VirtualDns }
+
+  child_type_MX_VirtualDnsRecord:
+    type: OS::ContrailV2::VirtualDnsRecord
+    depends_on: [ parentVirtualDns, child1VirtualDns ]
+    properties:
+      name: { get_param: child_vdns_type_mx_record_name }
+      virtual_DNS_record_data:
+        {
+          virtual_DNS_record_data_record_name: { get_param: child_vdns_type_mx_virtual_DNS_record_data_record_name },
+          virtual_DNS_record_data_record_type: "MX",
+          virtual_DNS_record_data_record_class: "IN",
+          virtual_DNS_record_data_record_data: { get_param: child_vdns_type_mx_virtual_DNS_record_data_record_data },
+          virtual_DNS_record_data_record_ttl_seconds: { get_param: child_vdns_type_mx_virtual_DNS_record_data_record_ttl_seconds },
+          virtual_DNS_record_data_record_mx_preference: { get_param: child_vdns_type_mx_virtual_DNS_record_data_record_mx_preference },
+        }
+      display_name: { get_param: child_vdns_type_mx_record_display_name }
+      virtual_DNS: { get_resource: child1VirtualDns }
+
+  child_type_PTR_VirtualDnsRecord:
+    type: OS::ContrailV2::VirtualDnsRecord
+    depends_on: [ parentVirtualDns, child1VirtualDns ]
+    properties:
+      name: { get_param: child_vdns_type_ptr_record_name }
+      virtual_DNS_record_data:
+        {
+          virtual_DNS_record_data_record_name: { get_param: child_vdns_type_ptr_virtual_DNS_record_data_record_name },
+          virtual_DNS_record_data_record_type: "PTR",
+          virtual_DNS_record_data_record_class: "IN",
+          virtual_DNS_record_data_record_data: { get_param: child_vdns_type_ptr_virtual_DNS_record_data_record_data },
+          virtual_DNS_record_data_record_ttl_seconds: { get_param: child_vdns_type_ptr_virtual_DNS_record_data_record_ttl_seconds },
+        }
+      display_name: { get_param: child_vdns_type_ptr_record_display_name }
+      virtual_DNS: { get_resource: child1VirtualDns }
+
+
+  parent_1_NetworkIpam:
+    type: OS::ContrailV2::NetworkIpam
+    depends_on: [ parentVirtualDns, child1VirtualDns ]
+    properties:
+      name: { get_param: parent_ipam_1_name }
+      network_ipam_mgmt:
+        {
+          network_ipam_mgmt_ipam_dns_method: 'virtual-dns-server',
+          network_ipam_mgmt_ipam_dns_server:
+            {
+              network_ipam_mgmt_ipam_dns_server_virtual_dns_server_name: { get_param: parent_vdns_fq_name },
+            },
+          network_ipam_mgmt_cidr_block:
+            {
+              network_ipam_mgmt_cidr_block_ip_prefix: { get_param: parent_ipam_1_network_ipam_mgmt_cidr_block_ip_prefix },
+              network_ipam_mgmt_cidr_block_ip_prefix_len: { get_param: parent_ipam_1_network_ipam_mgmt_cidr_block_ip_prefix_len },
+            },
+        }
+      display_name: { get_param: parent_ipam_1_display_name }
+      virtual_DNS_refs: [{ get_param: parent_vdns_fq_name }]
+
+  child_1_NetworkIpam:
+    type: OS::ContrailV2::NetworkIpam
+    depends_on: [ parentVirtualDns, child1VirtualDns ]
+    properties:
+      name: { get_param: child_ipam_1_name }
+      network_ipam_mgmt:
+        {
+          network_ipam_mgmt_ipam_dns_method: 'virtual-dns-server',
+          network_ipam_mgmt_ipam_dns_server:
+            {
+              network_ipam_mgmt_ipam_dns_server_virtual_dns_server_name: { get_param: child_vdns_fq_name },
+            },
+          network_ipam_mgmt_cidr_block:
+            {
+              network_ipam_mgmt_cidr_block_ip_prefix: { get_param: child_ipam_1_network_ipam_mgmt_cidr_block_ip_prefix },
+              network_ipam_mgmt_cidr_block_ip_prefix_len: { get_param: child_ipam_1_network_ipam_mgmt_cidr_block_ip_prefix_len },
+            },
+        }
+      display_name: { get_param: child_ipam_1_display_name }
+      virtual_DNS_refs: [{ get_param: child_vdns_fq_name }]
+
+
+  parent_ipam_1_VirtualNetwork_1:
+    type: OS::ContrailV2::VirtualNetwork
+    depends_on: [ parent_1_NetworkIpam ]
+    properties:
+      name: {{unique}}_parent_ipam_1_VirtualNetwork_1
+      network_ipam_refs: [{ get_resource: parent_1_NetworkIpam }]
+      network_ipam_refs_data:
+        [{
+          network_ipam_refs_data_ipam_subnets:
+            [{
+              network_ipam_refs_data_ipam_subnets_subnet:
+                {
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix: { get_param: parent_ipam_1_network_ipam_mgmt_cidr_block_vn_1_ip_prefix },
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len: { get_param: parent_ipam_1_network_ipam_mgmt_cidr_block_vn_1_ip_prefix_len },
+                },
+          network_ipam_refs_data_ipam_subnets_addr_from_start: { get_param: network_ipam_refs_data_ipam_subnets_addr_from_start_true },
+            }]
+         }]
+
+  child_ipam_1_VirtualNetwork_1:
+    type: OS::ContrailV2::VirtualNetwork
+    depends_on: [ child_1_NetworkIpam ]
+    properties:
+      name: {{unique}}_child_ipam_1_VirtualNetwork_1
+      network_ipam_refs: [{ get_resource: child_1_NetworkIpam }]
+      network_ipam_refs_data:
+        [{
+          network_ipam_refs_data_ipam_subnets:
+            [{
+              network_ipam_refs_data_ipam_subnets_subnet:
+                {
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix: { get_param: child_ipam_1_network_ipam_mgmt_cidr_block_vn_1_ip_prefix },
+                  network_ipam_refs_data_ipam_subnets_subnet_ip_prefix_len: { get_param: child_ipam_1_network_ipam_mgmt_cidr_block_vn_1_ip_prefix_len },
+                },
+          network_ipam_refs_data_ipam_subnets_addr_from_start: { get_param: network_ipam_refs_data_ipam_subnets_addr_from_start_true },
+            }]
+        }]
+
+  parent_vn_1_vm_1_VirtualMachineInterface:
+    type: OS::ContrailV2::VirtualMachineInterface
+    properties:
+      name: {{ unique }}_parent_vn_1_vm_1_VirtualMachineInterface
+      virtual_network_refs: [{ list_join: [':', { get_attr: [ parent_ipam_1_VirtualNetwork_1, fq_name ] } ] }]
+
+  child_vn_1_vm_3_VirtualMachineInterface:
+    type: OS::ContrailV2::VirtualMachineInterface
+    properties:
+      name: {{ unique }}_child_vn_1_vm_3_VirtualMachineInterface
+      virtual_network_refs: [{ list_join: [':', { get_attr: [ child_ipam_1_VirtualNetwork_1, fq_name ] } ] }]
+
+  # Instance IPs
+  parent_vn_1_vm_1_InstanceIp:
+    type: OS::ContrailV2::InstanceIp
+    depends_on: [ parent_vn_1_vm_1_VirtualMachineInterface, parent_ipam_1_VirtualNetwork_1 ]
+    properties:
+      virtual_machine_interface_refs: [{ get_resource: parent_vn_1_vm_1_VirtualMachineInterface }]
+      virtual_network_refs: [{ list_join: [':', { get_attr: [ parent_ipam_1_VirtualNetwork_1, fq_name ] } ] }]
+
+  child_vn_1_vm_3_InstanceIp:
+    type: OS::ContrailV2::InstanceIp
+    depends_on: [ child_vn_1_vm_3_VirtualMachineInterface, child_ipam_1_VirtualNetwork_1 ]
+    properties:
+      virtual_machine_interface_refs: [{ get_resource: child_vn_1_vm_3_VirtualMachineInterface }]
+      virtual_network_refs: [{ list_join: [':', { get_attr: [ child_ipam_1_VirtualNetwork_1, fq_name ] } ] }]
+
+{% for agent in agents.values() %}
+  {% set agent_index = agent.id.split('_')[3] %}
+  {% if 'master' in agent.id %}
+
+  {{ agent.id }}:
+    type: OS::Nova::Server
+    depends_on: [ parent_vn_1_vm_1_InstanceIp ]
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: { get_param: availability_zone }
+      networks:
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_shaker_port }
+        #==shaker port
+        - port: { get_resource: parent_vn_1_vm_1_VirtualMachineInterface }
+        #==external port
+        #- network: { get_param: external_net }
+        #==external port
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash
+            dhclient ens4
+
+            #==external port
+            #dhclient ens5
+            #==external port
+
+            #==shaker cmd
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID --debug --log-file /var/log/shaker-agent.log
+            #==shaker cmd
+
+            echo $parent_ipam_1_vn_1_gw >> ~/parent_ipam_1_vn_1_gw.txt
+            echo $parent_vn_1_vm_1_ip >> ~/parent_vn_1_vm_1_ip.txt
+            echo $parent_domain_name >> ~/parent_domain_name.txt
+            echo $parent_cname >> ~/parent_cname.txt
+            echo $child_sub_domain_name >> ~/child_sub_domain_name.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'A'" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup $parent_domain_name $parent_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'AAAA'" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup -query=aaaa $parent_domain_name $parent_ipam_1_vn_1_gw  >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'CNAME'" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup -query=cname vdns-test-author.$parent_domain_name $parent_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'MX'" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup -query=mx $parent_domain_name $parent_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'PTR'" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup -query=ptr $parent_vn_1_vm_1_ip $parent_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'A' (Delegated)" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup $child_sub_domain_name.$parent_domain_name $parent_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'AAAA' (Delegated)" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup -query=aaaa $child_sub_domain_name.$parent_domain_name $parent_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'CNAME' (Delegated)" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup -query=cname $parent_cname.$child_sub_domain_name.$parent_domain_name $parent_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'MX' (Delegated)" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup -query=mx $child_sub_domain_name.$parent_domain_name $parent_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+          params:
+            #==shaker params
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+            #==shaker params
+            "$parent_ipam_1_vn_1_gw": { get_param: parent_ipam_1_network_ipam_mgmt_cidr_block_vn_1_gw }
+            "$parent_vn_1_vm_1_ip": { get_param: parent_vdns_type_a_virtual_DNS_record_data_record_data }
+            "$parent_domain_name": { get_param: parent_vdns_type_a_virtual_DNS_record_data_record_name }
+            "$parent_cname": { get_param: parent_vdns_type_cname_virtual_DNS_record_data_record_name }
+            "$child_sub_domain_name": { get_param: parent_vdns_type_ns_virtual_DNS_record_data_record_name }
+
+  #==shaker port
+  {{ agent.id }}_shaker_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: shaker_private_subnet }
+      security_groups:
+        - { get_resource: shaker_security_group }
+        - default
+  #==shaker port
+
+  {% else %}
+
+  {{ agent.id }}:
+    type: OS::Nova::Server
+    depends_on: [ child_vn_1_vm_3_InstanceIp ]
+    properties:
+      name: {{ agent.id }}
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      availability_zone: { get_param: availability_zone }
+      networks:
+        #==shaker port
+        - port: { get_resource: {{ agent.id }}_shaker_port }
+        #==shaker port
+        - port: { get_resource: child_vn_1_vm_3_VirtualMachineInterface }
+        #==external port
+        #- network: { get_param: external_net }
+        #==external port
+      user_data_format: RAW
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash
+
+            dhclient ens4
+
+            #==external port
+            #dhclient ens5
+            #==external port
+
+            #==shaker cmd
+            screen -dmS shaker-agent-screen shaker-agent --server-endpoint=$SERVER_ENDPOINT --agent-id=$AGENT_ID --debug --log-file /var/log/shaker-agent.log
+            #==shaker cmd
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'A'" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup $child_sub_domain_name.$parent_domain_name $child_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'AAAA'" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup -query=aaaa $child_sub_domain_name.$parent_domain_name $child_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'CNAME'" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup -query=cname $child_cname.$child_sub_domain_name.$parent_domain_name $child_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'MX'" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup -query=mx $child_sub_domain_name.$parent_domain_name $child_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+            echo "------------------------------------------------" >> ~/output.txt
+            echo "vDNS Test Output - Record Type: 'PTR'" >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+            nslookup -query=ptr $child_vn_1_vm_1_ip $child_ipam_1_vn_1_gw >> ~/output.txt
+            echo "------------------------------------------------" >> ~/output.txt
+
+          params:
+            #==shaker params
+            "$SERVER_ENDPOINT": { get_param: server_endpoint }
+            "$AGENT_ID": {{ agent.id }}
+            #==shaker params
+            "$child_ipam_1_vn_1_gw": { get_param: child_ipam_1_network_ipam_mgmt_cidr_block_vn_1_gw }
+            "$child_vn_1_vm_1_ip": { get_param: child_vdns_type_a_virtual_DNS_record_data_record_data }
+            "$parent_domain_name": { get_param: parent_vdns_type_a_virtual_DNS_record_data_record_name }
+            "$child_cname": { get_param: child_vdns_type_cname_virtual_DNS_record_data_record_name }
+            "$child_sub_domain_name": { get_param: parent_vdns_type_ns_virtual_DNS_record_data_record_name }
+
+  #==shaker port
+  {{ agent.id }}_shaker_port:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: shaker_private_net }
+      fixed_ips:
+        - subnet_id: { get_resource: shaker_private_subnet }
+      security_groups:
+        - { get_resource: shaker_security_group }
+        - default
+  #==shaker port
+
+  {% endif %}
+{% endfor %}
+
+
+outputs:
+#==shaker output
+{% for agent in agents.values() %}
+  {{ agent.id }}_instance_name:
+    value: { get_attr: [ {{ agent.id }}, instance_name ] }
+  {{ agent.id }}_ip:
+    value: { get_attr: [ {{ agent.id }}, networks, { get_attr: [shaker_private_net, name] }, 0 ] }
+{% endfor %}
+#==shaker output

@@ -1,0 +1,396 @@
+diff --git a/shaker/engine/config.py b/shaker/engine/config.py
+index 2f105ba..ef7a201 100644
+--- a/shaker/engine/config.py
++++ b/shaker/engine/config.py
+@@ -130,6 +130,11 @@ OPENSTACK_OPTS = [
+                default=utils.env('OS_REGION_NAME') or 'RegionOne',
+                help='Authentication region name, defaults to '
+                     'env[OS_REGION_NAME].'),
++    cfg.StrOpt('os-interface', metavar='<os-interface>',
++               default=utils.env('OS_INTERFACE'),
++               sample_default='',
++               help='Openstack interface, defaults to '
++                    'env[OS_INTERFACE].'),
+     cfg.StrOpt('os-profile', metavar='<hmac-key>',
+                default=utils.env('OS_PROFILE'),
+                sample_default='',
+@@ -160,6 +165,17 @@ OPENSTACK_OPTS = [
+                 default=(utils.env('SHAKER_CLEANUP_ON_ERROR') or True),
+                 help='Clean up the heat-stack upon any error occurred during '
+                      'scenario execution.'),
++    cfg.StrOpt('availability_zone',
++               default='',
++               help='Name of availability_zone. This setting will override '
++                    'the scenario accomodation setting.'),
++    cfg.IntOpt('compute_nodes',
++               default='',
++               help='Number of compute nodes to execute test on. This setting '
++                    'will override the scenario compute_nodes setting.'),
++    cfg.IntOpt('custom-contrail-asn',
++               default='64512',
++               help='Contrail Autonomous System Number.'),
+ 
+ ]
+ 
+diff --git a/shaker/engine/deploy.py b/shaker/engine/deploy.py
+index d704fa3..53f19c9 100644
+--- a/shaker/engine/deploy.py
++++ b/shaker/engine/deploy.py
+@@ -16,6 +16,8 @@
+ import collections
+ import functools
+ import random
++import sys
++import time
+ 
+ import jinja2
+ from oslo_config import cfg
+@@ -216,6 +218,20 @@ def normalize_accommodation(accommodation):
+         else:
+             result[s] = True
+ 
++    try:
++        # ol7435 override scenario's availability zone accommodation
++        # setting if availability_zone field is present in shaker.cfg
++        if cfg.CONF.availability_zone:
++            result['zones'] = [cfg.CONF.availability_zone]
++
++        # ol7435 override scenario's compute_nodes accommodation setting
++        # if compute_nodes field is present in shaker.cfg
++        if cfg.CONF.compute_nodes:
++            result['compute_nodes'] = cfg.CONF.compute_nodes
++
++    except cfg.NoSuchOptError:
++        pass
++
+     return result
+ 
+ 
+@@ -224,6 +240,7 @@ class Deployment(object):
+         self.openstack_client = None
+         self.has_stack = False
+         self.privileged_mode = True
++        self.support_stacks = []
+ 
+     def connect_to_openstack(self, openstack_params, flavor_name, image_name,
+                              external_net, dns_nameservers):
+@@ -243,7 +260,8 @@ class Deployment(object):
+ 
+     def _get_compute_nodes(self, accommodation):
+         try:
+-            return nova.get_available_compute_nodes(self.openstack_client.nova)
++            return nova.get_available_compute_nodes(self.openstack_client.nova,
++                                                    self.flavor_name)
+         except nova.ForbiddenException:
+             # user has no permissions to list compute nodes
+             LOG.info('OpenStack user does not have permission to list compute '
+@@ -293,6 +311,30 @@ class Deployment(object):
+             exit(1)
+         merged_parameters.update(specification.get('template_parameters', {}))
+ 
++        env_file = specification.get('env_file', None)
++        if env_file is not None:
++            merged_parameters.update(
++                self._render_env_template(env_file, base_dir))
++
++        supporting_templates = specification.get('supporting_templates', None)
++        if supporting_templates is not None:
++            for template in supporting_templates:
++                for k, v in template.items():
++                    try:
++                        support_name = v['name']
++                        heat.create_stack(
++                            self.openstack_client.heat, support_name,
++                            utils.read_file(v['file'], base_dir=base_dir),
++                            self._render_env_template(v['env'], base_dir))
++
++                        # track support stacks for cleanup
++                        self.support_stacks.append(support_name)
++
++                    except heat.exc.Conflict as err:
++                        # continue if support stack already exists
++                        LOG.info('Ignoring stack exists errors: %s', err)
++                        sys.exc_clear()
++
+         self.has_stack = True
+         stack_id = heat.create_stack(
+             self.openstack_client.heat, self.stack_name, rendered_template,
+@@ -321,6 +363,20 @@ class Deployment(object):
+                 return functools.partial(override_ip,
+                                          ip_type=override_spec.get('ip'))
+ 
++    # ol7435 method to translate jinja decorations in env files
++    def _render_env_template(self, env_file, base_dir):
++        env_template = utils.read_file(env_file,
++                                       base_dir=base_dir)
++        env_values = {
++            'CONF': cfg.CONF
++        }
++        compiled_env = jinja2.Template(env_template)
++        rendered_env = compiled_env.render(env_values)
++
++        env_parameters = utils.read_yaml(rendered_env)
++
++        return env_parameters['parameters']
++
+     def deploy(self, deployment, base_dir=None, server_endpoint=None):
+         agents = {}
+ 
+@@ -346,6 +402,20 @@ class Deployment(object):
+         return agents
+ 
+     def cleanup(self):
++        wait = 15
++
+         if self.has_stack and cfg.CONF.cleanup_on_error:
+             LOG.debug('Cleaning up the stack: %s', self.stack_name)
+             self.openstack_client.heat.stacks.delete(self.stack_name)
++            time.sleep(wait)
++
++        # ol7435 cleanup support stacks
++        # remove any possible duplicates from the support_stack list and
++        # reverse the order in order to prevent deletion errors due to
++        # dependencies
++        stack_set = list(set(self.support_stacks))[::-1]
++        if len(stack_set) > 0 and cfg.CONF.cleanup_on_error:
++            for stack in stack_set:
++                LOG.debug('Cleaning up the support stack: %s', stack)
++                self.openstack_client.heat.stacks.delete(stack)
++                time.sleep(wait)
+diff --git a/shaker/engine/executors/iperf.py b/shaker/engine/executors/iperf.py
+index 7dbceae..c328919 100644
+--- a/shaker/engine/executors/iperf.py
++++ b/shaker/engine/executors/iperf.py
+@@ -35,7 +35,15 @@ def add_common_iperf_params(cmd, executor):
+             cmd.add('--len', executor.test_definition.get('datagram_size'))
+     if executor.test_definition.get('bandwidth') is not None:
+         cmd.add('--bandwidth', executor.test_definition.get('bandwidth'))
+-    cmd.add('--time', executor.get_expected_duration())
++    if executor.test_definition.get('flags'):
++        flags = executor.test_definition.get('flags').replace(
++            "$SLAVE_IP", executor.agent['slave']['ip'])
++        for flag in str(flags).split(' '):
++            cmd.add(str(flag))
++    mutually_exclusive = {"-k", "--blockcount", "-n", "--num", "-l",
++                          "--length"}
++    if mutually_exclusive.isdisjoint(cmd.tokens):
++        cmd.add('--time', executor.get_expected_duration())
+     cmd.add('--parallel', executor.test_definition.get('threads') or 1)
+     if executor.test_definition.get('interval'):
+         cmd.add('--interval', executor.test_definition.get('interval'))
+diff --git a/shaker/engine/utils.py b/shaker/engine/utils.py
+index c4421e2..06d1796 100644
+--- a/shaker/engine/utils.py
++++ b/shaker/engine/utils.py
+@@ -134,8 +134,8 @@ def write_file(data, file_name, base_dir=''):
+             fd.close()
+ 
+ 
+-def read_yaml_file(file_name):
+-    raw = read_file(file_name)
++def read_yaml_file(file_name, base_dir=''):
++    raw = read_file(file_name, base_dir=base_dir)
+     try:
+         parsed = yaml.safe_load(raw)
+         return parsed
+@@ -145,6 +145,16 @@ def read_yaml_file(file_name):
+         raise
+ 
+ 
++def read_yaml(raw):
++    try:
++        parsed = yaml.safe_load(raw)
++        return parsed
++    except Exception as e:
++        LOG.error('Failed to parse input %(yaml)s in YAML format: %(err)s',
++                  dict(yaml=raw, err=e))
++        raise
++
++
+ def split_address(address):
+     try:
+         host, port = address.split(':')
+diff --git a/shaker/openstack/clients/nova.py b/shaker/openstack/clients/nova.py
+index c1ab930..ff46275 100644
+--- a/shaker/openstack/clients/nova.py
++++ b/shaker/openstack/clients/nova.py
+@@ -28,11 +28,50 @@ class ForbiddenException(nova_client_pkg.exceptions.Forbidden):
+     pass
+ 
+ 
+-def get_available_compute_nodes(nova_client):
++def get_available_compute_nodes(nova_client, flavor_name=None):
+     try:
+-        return [dict(host=svc.host, zone=svc.zone)
+-                for svc in nova_client.services.list(binary='nova-compute')
+-                if svc.state == 'up' and svc.status == 'enabled']
++        all_hosts = [dict(host=svc.host, zone=svc.zone)
++                     for svc in
++                     nova_client.services.list(binary='nova-compute')
++                     if svc.state == 'up' and svc.status == 'enabled']
++        # ol7435 filter all_hosts to pick only those supported
++        # by the flavor chosen. If the flavor does not have extra_specs set
++        # to match a host aggregate then the full lists of hosts will be
++        # returned. This ensures backwards compatability/"default" shaker
++        # behavior
++        if flavor_name is not None:
++            # need to gather aggregate_instance_extra_specs set in flavor
++            # and use this info to filter the list of all_hosts
++            for flavor in nova_client.flavors.list():
++                if flavor.name == flavor_name:
++                    extra_specs = flavor.get_keys()
++                    for item in extra_specs:
++                        if "aggregate_instance_extra_specs" in item:
++                            # getting the extra spec seting for flavor in the
++                            # standard format of extra_spec:setting
++                            extra_spec = item.split(":")[1]
++                            extra_spec_value = extra_specs.get(item)
++
++                            # create a flat list instead of a list of dicts
++                            agg_hosts = list(itertools.chain(
++                                *[agg.hosts for agg in
++                                  nova_client.aggregates.list() if
++                                  extra_spec in agg.metadata and
++                                  extra_spec_value in agg.metadata.values()]))
++
++                            # create list of available hosts with
++                            # host_aggregate cross-check
++                            avail_hosts = [
++                                dict(host=elem['host'], zone=elem['zone']) for
++                                elem
++                                in
++                                all_hosts if elem['host'] in agg_hosts]
++
++                            if len(avail_hosts) > 0:
++                                return avail_hosts
++
++        return all_hosts
++
+     except nova_client_pkg.exceptions.Forbidden:
+         msg = 'Forbidden to get list of compute nodes'
+         raise ForbiddenException(msg)
+diff --git a/shaker/resources/report_templates/interactive.html b/shaker/resources/report_templates/interactive.html
+index dd04bda..9382bc9 100644
+--- a/shaker/resources/report_templates/interactive.html
++++ b/shaker/resources/report_templates/interactive.html
+@@ -451,6 +451,13 @@
+       parseUrlToState();
+       console.log(state);
+ 
++      // change the status of tests that have sla failures
++      // to "fail", only if they were previously marked "ok"
++      $.each(report.sla, function(_i, sla) {
++        if (sla.state == "FAIL" && report.records[sla.record].status == "ok") {
++          report.records[sla.record].status = "fail";
++        }
++      });
+       // pre-process records
+       $.each(report.records, function(_i, record) {
+         if (record.status) {
+@@ -458,6 +465,7 @@
+           record["is_status_lost"] = record.status == "lost";
+           record["is_status_interrupted"] = record.status == "interrupted";
+           record["is_status_error"] = record.status == "error";
++          record["is_status_fail"] = record.status == "fail";
+         }
+       });
+ 
+@@ -545,6 +553,7 @@
+   {{#if is_status_lost}}<span class="label label-danger"><span class="glyphicon glyphicon-alert" aria-hidden="true"></span>lost</span>{{/if}}
+   {{#if is_status_interrupted}}<span class="label label-warning"><span class="glyphicon glyphicon-stop" aria-hidden="true"></span>interrupted</span>{{/if}}
+   {{#if is_status_error}}<span class="label label-danger"><span class="glyphicon glyphicon-alert" aria-hidden="true"></span>error</span>{{/if}}
++  {{#if is_status_fail}}<span class="label label-danger"><span class="glyphicon glyphicon-alert" aria-hidden="true"></span>sla fail</span>{{/if}}
+   {{#if stats_yaml}}
+     <h4>Stats</h4>
+     <pre>{{ stats_yaml }}</pre>
+@@ -639,6 +648,12 @@
+             error
+           </span>
+         {{/if}}
++        {{#if is_status_fail }}
++          <span class="label label-danger">
++            <span class="glyphicon glyphicon-alert" aria-hidden="true"></span>
++            sla fail
++          </span>
++        {{/if}}
+       </td>
+     </tr>
+     {{/records}}
+diff --git a/shaker/resources/schemas/scenario.yaml b/shaker/resources/schemas/scenario.yaml
+index 4630721..fd179d1 100644
+--- a/shaker/resources/schemas/scenario.yaml
++++ b/shaker/resources/schemas/scenario.yaml
+@@ -9,8 +9,24 @@ mapping:
+   deployment:
+     type: map
+     mapping:
++      supporting_templates:
++        type: seq
++        sequence:
++          - type: map
++            mapping:
++              template:
++                type: map
++                mapping:
++                  file:
++                    type: str
++                  env:
++                    type: str
++                  name:
++                    type: str
+       template:
+         type: str
++      env_file:
++        type: str
+       agents:
+         type: any
+       accommodation:
+diff --git a/shaker/tests/test_deploy.py b/shaker/tests/test_deploy.py
+index 645f2be..720be9e 100644
+--- a/shaker/tests/test_deploy.py
++++ b/shaker/tests/test_deploy.py
+@@ -553,8 +553,9 @@ class TestDeploy(testtools.TestCase):
+     def test_get_compute_nodes_non_admin(self, nova_nodes_mock):
+         deployment = deploy.Deployment()
+         deployment.openstack_client = mock.Mock()
++        deployment.flavor_name = "test.flavor"
+ 
+-        def raise_error(arg):
++        def raise_error(nova_client, flavor_name):
+             raise nova.ForbiddenException('err')
+ 
+         nova_nodes_mock.side_effect = raise_error
+@@ -569,8 +570,9 @@ class TestDeploy(testtools.TestCase):
+     def test_get_compute_nodes_non_admin_zones(self, nova_nodes_mock):
+         deployment = deploy.Deployment()
+         deployment.openstack_client = mock.Mock()
++        deployment.flavor_name = "test.flavor"
+ 
+-        def raise_error(arg):
++        def raise_error(nova_client, flavor_name):
+             raise nova.ForbiddenException('err')
+ 
+         nova_nodes_mock.side_effect = raise_error
+@@ -590,8 +592,9 @@ class TestDeploy(testtools.TestCase):
+     def test_get_compute_nodes_non_admin_not_configured(self, nova_nodes_mock):
+         deployment = deploy.Deployment()
+         deployment.openstack_client = mock.Mock()
++        deployment.flavor_name = "test.flavor"
+ 
+-        def raise_error(arg):
++        def raise_error(nova_client, flavor_name):
+             raise nova.ForbiddenException('err')
+ 
+         nova_nodes_mock.side_effect = raise_error
+diff --git a/shaker/tests/test_server.py b/shaker/tests/test_server.py
+index 5becdf1..b083f3b 100644
+--- a/shaker/tests/test_server.py
++++ b/shaker/tests/test_server.py
+@@ -176,6 +176,7 @@ class TestServerPlayScenario(testtools.TestCase):
+         self.config_fixture.config(os_project_domain_name='Default')
+         self.config_fixture.config(os_user_domain_name='Default')
+         self.config_fixture.config(os_identity_api_version='3')
++        self.config_fixture.config(os_interface='os-interface')
+ 
+         deploy_obj.deploy.return_value = {
+             'ID': {'id': 'ID', 'mode': 'alone'}
