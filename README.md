@@ -17,9 +17,9 @@ Apply AT&T enhancement patch:
  - cd shaker
  - git apply -v path/to/patch/in/this/repo/att-shaker.patch
  - ***** if the patch does not apply cleanly:
-    - As of this writing the latest commit in the Shaker repo is d414d967d4d24559fb70591a544bcd40b61f3e25
+    - As of this writing the latest commit in the Shaker repo is accb9a9d3b10de7c94f708151fd59cc1f8e3abf1
     - If the patch does not apply cleanly you can:
-       - git reset --hard d414d967d4d24559fb70591a544bcd40b61f3e25
+       - git reset --hard (commit hash above)
 	   - reapply patch
 
 Once the patch is applied cleanly you should be able to execute the Contrail tests provided in this repo per the usual Shaker directions

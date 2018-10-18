@@ -1,20 +1,8 @@
 diff --git a/shaker/engine/config.py b/shaker/engine/config.py
-index 2f105ba..ef7a201 100644
+index 27a9bdd..6d5a666 100644
 --- a/shaker/engine/config.py
 +++ b/shaker/engine/config.py
-@@ -130,6 +130,11 @@ OPENSTACK_OPTS = [
-                default=utils.env('OS_REGION_NAME') or 'RegionOne',
-                help='Authentication region name, defaults to '
-                     'env[OS_REGION_NAME].'),
-+    cfg.StrOpt('os-interface', metavar='<os-interface>',
-+               default=utils.env('OS_INTERFACE'),
-+               sample_default='',
-+               help='Openstack interface, defaults to '
-+                    'env[OS_INTERFACE].'),
-     cfg.StrOpt('os-profile', metavar='<hmac-key>',
-                default=utils.env('OS_PROFILE'),
-                sample_default='',
-@@ -160,6 +165,17 @@ OPENSTACK_OPTS = [
+@@ -166,6 +166,17 @@ OPENSTACK_OPTS = [
                  default=(utils.env('SHAKER_CLEANUP_ON_ERROR') or True),
                  help='Clean up the heat-stack upon any error occurred during '
                       'scenario execution.'),
@@ -179,7 +167,7 @@ index 7dbceae..c328919 100644
      if executor.test_definition.get('interval'):
          cmd.add('--interval', executor.test_definition.get('interval'))
 diff --git a/shaker/engine/utils.py b/shaker/engine/utils.py
-index c4421e2..06d1796 100644
+index 0b226c5..a8d5003 100644
 --- a/shaker/engine/utils.py
 +++ b/shaker/engine/utils.py
 @@ -134,8 +134,8 @@ def write_file(data, file_name, base_dir=''):
@@ -382,15 +370,3 @@ index 645f2be..720be9e 100644
              raise nova.ForbiddenException('err')
  
          nova_nodes_mock.side_effect = raise_error
-diff --git a/shaker/tests/test_server.py b/shaker/tests/test_server.py
-index 5becdf1..b083f3b 100644
---- a/shaker/tests/test_server.py
-+++ b/shaker/tests/test_server.py
-@@ -176,6 +176,7 @@ class TestServerPlayScenario(testtools.TestCase):
-         self.config_fixture.config(os_project_domain_name='Default')
-         self.config_fixture.config(os_user_domain_name='Default')
-         self.config_fixture.config(os_identity_api_version='3')
-+        self.config_fixture.config(os_interface='os-interface')
- 
-         deploy_obj.deploy.return_value = {
-             'ID': {'id': 'ID', 'mode': 'alone'}
