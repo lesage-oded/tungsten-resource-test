@@ -1,19 +1,11 @@
 diff --git a/shaker/engine/config.py b/shaker/engine/config.py
-index 27a9bdd..6d5a666 100644
+index af06d0c..33fb0cc 100644
 --- a/shaker/engine/config.py
 +++ b/shaker/engine/config.py
-@@ -166,6 +166,17 @@ OPENSTACK_OPTS = [
+@@ -166,6 +166,9 @@ OPENSTACK_OPTS = [
                  default=(utils.env('SHAKER_CLEANUP_ON_ERROR') or True),
                  help='Clean up the heat-stack upon any error occurred during '
                       'scenario execution.'),
-+    cfg.StrOpt('availability_zone',
-+               default='',
-+               help='Name of availability_zone. This setting will override '
-+                    'the scenario accomodation setting.'),
-+    cfg.IntOpt('compute_nodes',
-+               default='',
-+               help='Number of compute nodes to execute test on. This setting '
-+                    'will override the scenario compute_nodes setting.'),
 +    cfg.IntOpt('custom-contrail-asn',
 +               default='64512',
 +               help='Contrail Autonomous System Number.'),
@@ -21,7 +13,7 @@ index 27a9bdd..6d5a666 100644
  ]
  
 diff --git a/shaker/engine/deploy.py b/shaker/engine/deploy.py
-index d704fa3..53f19c9 100644
+index 6caf3dd..e0eb013 100644
 --- a/shaker/engine/deploy.py
 +++ b/shaker/engine/deploy.py
 @@ -16,6 +16,8 @@
@@ -33,28 +25,7 @@ index d704fa3..53f19c9 100644
  
  import jinja2
  from oslo_config import cfg
-@@ -216,6 +218,20 @@ def normalize_accommodation(accommodation):
-         else:
-             result[s] = True
- 
-+    try:
-+        # ol7435 override scenario's availability zone accommodation
-+        # setting if availability_zone field is present in shaker.cfg
-+        if cfg.CONF.availability_zone:
-+            result['zones'] = [cfg.CONF.availability_zone]
-+
-+        # ol7435 override scenario's compute_nodes accommodation setting
-+        # if compute_nodes field is present in shaker.cfg
-+        if cfg.CONF.compute_nodes:
-+            result['compute_nodes'] = cfg.CONF.compute_nodes
-+
-+    except cfg.NoSuchOptError:
-+        pass
-+
-     return result
- 
- 
-@@ -224,6 +240,7 @@ class Deployment(object):
+@@ -232,6 +234,7 @@ class Deployment(object):
          self.openstack_client = None
          self.has_stack = False
          self.privileged_mode = True
@@ -62,7 +33,7 @@ index d704fa3..53f19c9 100644
  
      def connect_to_openstack(self, openstack_params, flavor_name, image_name,
                               external_net, dns_nameservers):
-@@ -243,7 +260,8 @@ class Deployment(object):
+@@ -251,7 +254,8 @@ class Deployment(object):
  
      def _get_compute_nodes(self, accommodation):
          try:
@@ -72,7 +43,7 @@ index d704fa3..53f19c9 100644
          except nova.ForbiddenException:
              # user has no permissions to list compute nodes
              LOG.info('OpenStack user does not have permission to list compute '
-@@ -293,6 +311,30 @@ class Deployment(object):
+@@ -301,6 +305,30 @@ class Deployment(object):
              exit(1)
          merged_parameters.update(specification.get('template_parameters', {}))
  
@@ -103,7 +74,7 @@ index d704fa3..53f19c9 100644
          self.has_stack = True
          stack_id = heat.create_stack(
              self.openstack_client.heat, self.stack_name, rendered_template,
-@@ -321,6 +363,20 @@ class Deployment(object):
+@@ -329,6 +357,20 @@ class Deployment(object):
                  return functools.partial(override_ip,
                                           ip_type=override_spec.get('ip'))
  
@@ -124,7 +95,7 @@ index d704fa3..53f19c9 100644
      def deploy(self, deployment, base_dir=None, server_endpoint=None):
          agents = {}
  
-@@ -346,6 +402,20 @@ class Deployment(object):
+@@ -354,6 +396,20 @@ class Deployment(object):
          return agents
  
      def cleanup(self):
@@ -334,10 +305,10 @@ index 4630721..fd179d1 100644
          type: any
        accommodation:
 diff --git a/shaker/tests/test_deploy.py b/shaker/tests/test_deploy.py
-index 645f2be..720be9e 100644
+index bfe80c0..41e76af 100644
 --- a/shaker/tests/test_deploy.py
 +++ b/shaker/tests/test_deploy.py
-@@ -553,8 +553,9 @@ class TestDeploy(testtools.TestCase):
+@@ -566,8 +566,9 @@ class TestDeploy(testtools.TestCase):
      def test_get_compute_nodes_non_admin(self, nova_nodes_mock):
          deployment = deploy.Deployment()
          deployment.openstack_client = mock.Mock()
@@ -348,7 +319,7 @@ index 645f2be..720be9e 100644
              raise nova.ForbiddenException('err')
  
          nova_nodes_mock.side_effect = raise_error
-@@ -569,8 +570,9 @@ class TestDeploy(testtools.TestCase):
+@@ -582,8 +583,9 @@ class TestDeploy(testtools.TestCase):
      def test_get_compute_nodes_non_admin_zones(self, nova_nodes_mock):
          deployment = deploy.Deployment()
          deployment.openstack_client = mock.Mock()
@@ -359,7 +330,7 @@ index 645f2be..720be9e 100644
              raise nova.ForbiddenException('err')
  
          nova_nodes_mock.side_effect = raise_error
-@@ -590,8 +592,9 @@ class TestDeploy(testtools.TestCase):
+@@ -603,8 +605,9 @@ class TestDeploy(testtools.TestCase):
      def test_get_compute_nodes_non_admin_not_configured(self, nova_nodes_mock):
          deployment = deploy.Deployment()
          deployment.openstack_client = mock.Mock()
