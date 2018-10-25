@@ -13,7 +13,7 @@ index af06d0c..33fb0cc 100644
  ]
  
 diff --git a/shaker/engine/deploy.py b/shaker/engine/deploy.py
-index 6caf3dd..e0eb013 100644
+index a4ca56d..e0eb013 100644
 --- a/shaker/engine/deploy.py
 +++ b/shaker/engine/deploy.py
 @@ -16,6 +16,8 @@
@@ -33,17 +33,7 @@ index 6caf3dd..e0eb013 100644
  
      def connect_to_openstack(self, openstack_params, flavor_name, image_name,
                               external_net, dns_nameservers):
-@@ -251,7 +254,8 @@ class Deployment(object):
- 
-     def _get_compute_nodes(self, accommodation):
-         try:
--            return nova.get_available_compute_nodes(self.openstack_client.nova)
-+            return nova.get_available_compute_nodes(self.openstack_client.nova,
-+                                                    self.flavor_name)
-         except nova.ForbiddenException:
-             # user has no permissions to list compute nodes
-             LOG.info('OpenStack user does not have permission to list compute '
-@@ -301,6 +305,30 @@ class Deployment(object):
+@@ -302,6 +305,30 @@ class Deployment(object):
              exit(1)
          merged_parameters.update(specification.get('template_parameters', {}))
  
@@ -74,7 +64,7 @@ index 6caf3dd..e0eb013 100644
          self.has_stack = True
          stack_id = heat.create_stack(
              self.openstack_client.heat, self.stack_name, rendered_template,
-@@ -329,6 +357,20 @@ class Deployment(object):
+@@ -330,6 +357,20 @@ class Deployment(object):
                  return functools.partial(override_ip,
                                           ip_type=override_spec.get('ip'))
  
@@ -95,7 +85,7 @@ index 6caf3dd..e0eb013 100644
      def deploy(self, deployment, base_dir=None, server_endpoint=None):
          agents = {}
  
-@@ -354,6 +396,20 @@ class Deployment(object):
+@@ -355,6 +396,20 @@ class Deployment(object):
          return agents
  
      def cleanup(self):
@@ -169,65 +159,6 @@ index 0b226c5..a8d5003 100644
  def split_address(address):
      try:
          host, port = address.split(':')
-diff --git a/shaker/openstack/clients/nova.py b/shaker/openstack/clients/nova.py
-index c1ab930..ff46275 100644
---- a/shaker/openstack/clients/nova.py
-+++ b/shaker/openstack/clients/nova.py
-@@ -28,11 +28,50 @@ class ForbiddenException(nova_client_pkg.exceptions.Forbidden):
-     pass
- 
- 
--def get_available_compute_nodes(nova_client):
-+def get_available_compute_nodes(nova_client, flavor_name=None):
-     try:
--        return [dict(host=svc.host, zone=svc.zone)
--                for svc in nova_client.services.list(binary='nova-compute')
--                if svc.state == 'up' and svc.status == 'enabled']
-+        all_hosts = [dict(host=svc.host, zone=svc.zone)
-+                     for svc in
-+                     nova_client.services.list(binary='nova-compute')
-+                     if svc.state == 'up' and svc.status == 'enabled']
-+        # ol7435 filter all_hosts to pick only those supported
-+        # by the flavor chosen. If the flavor does not have extra_specs set
-+        # to match a host aggregate then the full lists of hosts will be
-+        # returned. This ensures backwards compatability/"default" shaker
-+        # behavior
-+        if flavor_name is not None:
-+            # need to gather aggregate_instance_extra_specs set in flavor
-+            # and use this info to filter the list of all_hosts
-+            for flavor in nova_client.flavors.list():
-+                if flavor.name == flavor_name:
-+                    extra_specs = flavor.get_keys()
-+                    for item in extra_specs:
-+                        if "aggregate_instance_extra_specs" in item:
-+                            # getting the extra spec seting for flavor in the
-+                            # standard format of extra_spec:setting
-+                            extra_spec = item.split(":")[1]
-+                            extra_spec_value = extra_specs.get(item)
-+
-+                            # create a flat list instead of a list of dicts
-+                            agg_hosts = list(itertools.chain(
-+                                *[agg.hosts for agg in
-+                                  nova_client.aggregates.list() if
-+                                  extra_spec in agg.metadata and
-+                                  extra_spec_value in agg.metadata.values()]))
-+
-+                            # create list of available hosts with
-+                            # host_aggregate cross-check
-+                            avail_hosts = [
-+                                dict(host=elem['host'], zone=elem['zone']) for
-+                                elem
-+                                in
-+                                all_hosts if elem['host'] in agg_hosts]
-+
-+                            if len(avail_hosts) > 0:
-+                                return avail_hosts
-+
-+        return all_hosts
-+
-     except nova_client_pkg.exceptions.Forbidden:
-         msg = 'Forbidden to get list of compute nodes'
-         raise ForbiddenException(msg)
 diff --git a/shaker/resources/report_templates/interactive.html b/shaker/resources/report_templates/interactive.html
 index dd04bda..9382bc9 100644
 --- a/shaker/resources/report_templates/interactive.html
@@ -304,40 +235,3 @@ index 4630721..fd179d1 100644
        agents:
          type: any
        accommodation:
-diff --git a/shaker/tests/test_deploy.py b/shaker/tests/test_deploy.py
-index bfe80c0..41e76af 100644
---- a/shaker/tests/test_deploy.py
-+++ b/shaker/tests/test_deploy.py
-@@ -566,8 +566,9 @@ class TestDeploy(testtools.TestCase):
-     def test_get_compute_nodes_non_admin(self, nova_nodes_mock):
-         deployment = deploy.Deployment()
-         deployment.openstack_client = mock.Mock()
-+        deployment.flavor_name = "test.flavor"
- 
--        def raise_error(arg):
-+        def raise_error(nova_client, flavor_name):
-             raise nova.ForbiddenException('err')
- 
-         nova_nodes_mock.side_effect = raise_error
-@@ -582,8 +583,9 @@ class TestDeploy(testtools.TestCase):
-     def test_get_compute_nodes_non_admin_zones(self, nova_nodes_mock):
-         deployment = deploy.Deployment()
-         deployment.openstack_client = mock.Mock()
-+        deployment.flavor_name = "test.flavor"
- 
--        def raise_error(arg):
-+        def raise_error(nova_client, flavor_name):
-             raise nova.ForbiddenException('err')
- 
-         nova_nodes_mock.side_effect = raise_error
-@@ -603,8 +605,9 @@ class TestDeploy(testtools.TestCase):
-     def test_get_compute_nodes_non_admin_not_configured(self, nova_nodes_mock):
-         deployment = deploy.Deployment()
-         deployment.openstack_client = mock.Mock()
-+        deployment.flavor_name = "test.flavor"
- 
--        def raise_error(arg):
-+        def raise_error(nova_client, flavor_name):
-             raise nova.ForbiddenException('err')
- 
-         nova_nodes_mock.side_effect = raise_error
