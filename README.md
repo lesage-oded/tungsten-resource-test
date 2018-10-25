@@ -9,6 +9,17 @@ These enhancements include the ability to specify supporting heat stacks for a t
 Setup
 ------------------
 
+Prepare Glance Image:
+
+The qcow2 image which contains necessary tools, like bridgeutils, for certain Contrail tests has been split
+to accommodate the file size imposed by github. It can be rejoined and verified with:
+
+  - cd qcow2
+  - cat shaker-part.0* > shaker-image.qcow2
+  - md5sum -c shaker-image.manifest
+
+You can then upload shaker-image.qcow2 into Glance
+
 Clone Shaker repo:
 
 - git clone https://github.com/openstack/shaker.git
@@ -22,6 +33,6 @@ Apply AT&T enhancement patch:
        - git reset --hard (commit hash above)
 	   - reapply patch
 
-Once the patch is applied cleanly you should be able to execute the Contrail tests provided in this repo per the usual Shaker directions
-e.g. create a shaker.cfg which uses the tests provided in this repo.
+Once the patch is applied cleanly, and shaker-image.qcow2 has been uploaded to Glance, you should be able to execute 
+the Contrail tests provided in this repo per the usual Shaker directions e.g. create a shaker.cfg which uses the tests provided in this repo.
 
