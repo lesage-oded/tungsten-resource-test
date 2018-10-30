@@ -28,7 +28,7 @@ Apply AT&T enhancement patch:
  - cd shaker
  - git apply -v path/to/patch/in/this/repo/att-shaker.patch
  - ***** if the patch does not apply cleanly:
-    - As of this writing the latest commit hash in the Shaker repo is b300583ebbc5079e7ad2fe19adad3bf001ebc9bf
+    - As of this writing the latest commit hash in the Shaker repo is 296cfb134484877b1fc94379596ee52d66f83fd5
     - If the patch does not apply cleanly you can:
        - git reset --hard (commit hash above)
 	   - reapply patch
