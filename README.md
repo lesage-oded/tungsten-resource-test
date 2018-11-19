@@ -23,4 +23,5 @@ Clone Shaker repo:
 
 - git clone https://github.com/openstack/shaker.git
 
-Execute Shaker per the documentation e.g. create a shaker.cfg and shaker --config-file shaker.cfg
+Execute Shaker per the documentation e.g. create a shaker.cfg and:
+-  shaker --config-file shaker.cfg
