@@ -44,7 +44,7 @@ execution:
       title: TCP
       class: iperf3
       sla:
-      - "[type == 'agent'] >> (stats.bandwidth.avg > 1000)"
+      - "[type == 'agent'] >> (stats.bandwidth.avg > 100)"
     -
       title: UDP and ICMP
       class: flent

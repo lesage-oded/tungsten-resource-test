@@ -3,8 +3,7 @@ Shaker tests intended for eventual incorporation into CI testing
 
 Overview
 ===============
-The tests provided in this repo work using a patched version of Shaker to add enhancements necessary to run the tests.
-These enhancements include the ability to specify supporting heat stacks for a test and use heat environment files.
+The tests provided in this repo work are a copy of the Contrail tests used internally at AT&T.
 
 Setup
 ------------------
@@ -24,15 +23,4 @@ Clone Shaker repo:
 
 - git clone https://github.com/openstack/shaker.git
 
-Apply AT&T enhancement patch:
- - cd shaker
- - git apply -v path/to/patch/in/this/repo/att-shaker.patch
- - ***** if the patch does not apply cleanly:
-    - As of this writing the latest commit hash in the Shaker repo is abe9fbd877bc0114896b17e8c36b3fa6d71c7d02
-    - If the patch does not apply cleanly you can:
-       - git reset --hard (commit hash above)
-	   - reapply patch
-
-Once the patch is applied cleanly, and shaker-image.qcow2 has been uploaded to Glance, you should be able to execute 
-the Contrail tests provided in this repo per the usual Shaker directions e.g. create a shaker.cfg which uses the tests provided in this repo.
-
+Execute Shaker per the documentation e.g. create a shaker.cfg and shaker --config-file shaker.cfg
